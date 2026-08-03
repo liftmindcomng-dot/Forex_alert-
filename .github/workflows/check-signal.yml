@@ -2,11 +2,13 @@ name: Check forex signal
 
 on:
   schedule:
+    # Every 15 minutes. Note: GitHub's scheduler can lag by a few minutes
+    # under load — fine for a 15min/1h strategy, not for scalping.
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
-  contents: write
+  contents: write   # needed so the workflow can commit state.json back
 
 jobs:
   check:
@@ -23,7 +25,7 @@ jobs:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FX_PAIR: "EUR/USD"
+          FX_PAIRS: "EUR/USD,GBP/USD,USD/JPY,AUD/USD,XAU/USD"
           FX_INTERVAL: "15min"
         run: python forex_alert.py
 
