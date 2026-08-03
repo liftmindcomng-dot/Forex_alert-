@@ -1,3 +1,17 @@
 {
-  "last_alert_bar_time": null
+  "EUR/USD": {
+    "last_alert_bar_time": null
+  },
+  "GBP/USD": {
+    "last_alert_bar_time": null
+  },
+  "USD/JPY": {
+    "last_alert_bar_time": null
+  },
+  "AUD/USD": {
+    "last_alert_bar_time": null
+  },
+  "XAU/USD": {
+    "last_alert_bar_time": null
+  }
 }
