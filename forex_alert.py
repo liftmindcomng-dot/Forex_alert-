@@ -38,8 +38,10 @@ def fetch_series(pair, interval, outputsize=100):
         raise RuntimeError(f"Twelve Data error: {data.get('message', data)}")
     rows = list(reversed(data["values"]))  # oldest -> newest
     closes = [float(r["close"]) for r in rows]
+    highs = [float(r["high"]) for r in rows]
+    lows = [float(r["low"]) for r in rows]
     times = [r["datetime"] for r in rows]
-    return times, closes
+    return times, highs, lows, closes
 
 
 def ema(values, period):
@@ -75,8 +77,29 @@ def rsi(values, period=14):
     return out
 
 
-def compute_signal(times, closes):
+def atr(highs, lows, closes, period=14):
+    """Average True Range — measures recent volatility, used to size SL/TP."""
+    n = len(closes)
+    true_ranges = []
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        true_ranges.append(tr)
+    if len(true_ranges) < period:
+        return None
+    # Wilder's smoothing, same style as the RSI averaging above
+    avg = sum(true_ranges[:period]) / period
+    for tr in true_ranges[period:]:
+        avg = (avg * (period - 1) + tr) / period
+    return avg
+
+
+def compute_signal(times, highs, lows, closes):
     e12, e26, r14 = ema(closes, 12), ema(closes, 26), rsi(closes, 14)
+    a14 = atr(highs, lows, closes, 14)
     n = len(closes)
     last_price, last_e12, last_e26, last_rsi = closes[n-1], e12[n-1], e26[n-1], r14[n-1]
     prev_e12, prev_e26 = e12[n-2], e26[n-2]
@@ -84,14 +107,23 @@ def compute_signal(times, closes):
     crossed_up = prev_e12 <= prev_e26 and last_e12 > last_e26
     crossed_down = prev_e12 >= prev_e26 and last_e12 < last_e26
 
+    sl = tp = be = None
     if crossed_up and last_rsi < 70:
         signal, reason = "BUY", (
             f"EMA12 crossed above EMA26 with RSI at {last_rsi:.1f} (below 70)."
         )
+        if a14:
+            sl = last_price - 1.5 * a14
+            tp = last_price + 3 * a14
+            be = last_price + 1.0 * a14
     elif crossed_down and last_rsi > 30:
         signal, reason = "SELL", (
             f"EMA12 crossed below EMA26 with RSI at {last_rsi:.1f} (above 30)."
         )
+        if a14:
+            sl = last_price + 1.5 * a14
+            tp = last_price - 3 * a14
+            be = last_price - 1.0 * a14
     else:
         signal, reason = "HOLD", "No fresh crossover this bar."
 
@@ -103,6 +135,10 @@ def compute_signal(times, closes):
         "ema12": last_e12,
         "ema26": last_e26,
         "rsi": last_rsi,
+        "atr": a14,
+        "sl": sl,
+        "tp": tp,
+        "be": be,
         "is_fresh_crossover": crossed_up or crossed_down,
     }
 
@@ -145,8 +181,8 @@ def main():
             time.sleep(8)  # stay under Twelve Data's free-tier rate limit (8 req/min)
 
         try:
-            times, closes = fetch_series(pair, INTERVAL)
-            result = compute_signal(times, closes)
+            times, highs, lows, closes = fetch_series(pair, INTERVAL)
+            result = compute_signal(times, highs, lows, closes)
         except Exception as e:
             print(f"ERROR [{pair}]: {e}", file=sys.stderr)
             any_errors = True
@@ -160,10 +196,21 @@ def main():
 
         if result["is_fresh_crossover"] and result["signal"] in ("BUY", "SELL") and not already_alerted:
             emoji = "🟢" if result["signal"] == "BUY" else "🔴"
+            decimals = 3 if "JPY" in pair else 5
             msg = (
                 f"{emoji} *{result['signal']} — {pair}*\n"
-                f"Price: `{result['price']:.5f}`\n"
+                f"Price: `{result['price']:.{decimals}f}`\n"
                 f"RSI(14): `{result['rsi']:.1f}`\n"
+            )
+            if result["sl"] is not None:
+                msg += (
+                    f"SL: `{result['sl']:.{decimals}f}`\n"
+                    f"TP: `{result['tp']:.{decimals}f}`\n"
+                    f"Move to BE at: `{result['be']:.{decimals}f}`\n"
+                )
+            else:
+                msg += "SL/TP: not enough history to calculate ATR yet.\n"
+            msg += (
                 f"{result['reason']}\n"
                 f"Bar: {result['bar_time']} ({INTERVAL})"
             )
