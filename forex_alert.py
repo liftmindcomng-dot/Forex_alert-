@@ -1,16 +1,17 @@
 """
-Checks an EMA(12/26) crossover + RSI(14) filter on a forex pair using the
-Twelve Data API, and sends a Telegram message when a fresh BUY or SELL
-signal appears. Designed to be run on a schedule (e.g. every 15 minutes)
-by GitHub Actions — see .github/workflows/check-signal.yml.
+Checks an EMA(12/26) crossover + RSI(14) filter on one or more forex pairs
+using the Twelve Data API, and sends a Telegram message when a fresh BUY or
+SELL signal appears on any of them. Designed to be run on a schedule (e.g.
+every 15 minutes) by GitHub Actions — see .github/workflows/check-signal.yml.
 
-State (which bar we last alerted on) is kept in state.json so the same
-crossover doesn't trigger a repeat message on every run.
+State (which bar we last alerted on, per pair) is kept in state.json so the
+same crossover doesn't trigger a repeat message on every run.
 """
 
 import json
 import os
 import sys
+import time
 import urllib.request
 import urllib.parse
 
@@ -18,7 +19,8 @@ import urllib.parse
 API_KEY = os.environ["TWELVE_DATA_API_KEY"]
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-PAIR = os.environ.get("FX_PAIR", "EUR/USD")
+# Comma-separated list, e.g. "EUR/USD,GBP/USD,USD/JPY"
+PAIRS = [p.strip() for p in os.environ.get("FX_PAIRS", "EUR/USD,GBP/USD,USD/JPY,AUD/USD,XAU/USD").split(",") if p.strip()]
 INTERVAL = os.environ.get("FX_INTERVAL", "15min")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 
@@ -106,10 +108,15 @@ def compute_signal(times, closes):
 
 
 def load_state():
+    """State is keyed by pair: {"EUR/USD": {"last_alert_bar_time": ...}, ...}"""
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
-            return json.load(f)
-    return {"last_alert_bar_time": None}
+            data = json.load(f)
+        # migrate old single-pair format if present
+        if "last_alert_bar_time" in data:
+            return {PAIRS[0]: {"last_alert_bar_time": data["last_alert_bar_time"]}}
+        return data
+    return {}
 
 
 def save_state(state):
@@ -130,30 +137,47 @@ def send_telegram(text):
 
 
 def main():
-    times, closes = fetch_series(PAIR, INTERVAL)
-    result = compute_signal(times, closes)
     state = load_state()
+    any_errors = False
 
-    print(f"[{PAIR} {INTERVAL}] bar={result['bar_time']} signal={result['signal']} "
-          f"price={result['price']} rsi={result['rsi']:.1f}")
+    for i, pair in enumerate(PAIRS):
+        if i > 0:
+            time.sleep(8)  # stay under Twelve Data's free-tier rate limit (8 req/min)
 
-    already_alerted = state.get("last_alert_bar_time") == result["bar_time"]
+        try:
+            times, closes = fetch_series(pair, INTERVAL)
+            result = compute_signal(times, closes)
+        except Exception as e:
+            print(f"ERROR [{pair}]: {e}", file=sys.stderr)
+            any_errors = True
+            continue
 
-    if result["is_fresh_crossover"] and result["signal"] in ("BUY", "SELL") and not already_alerted:
-        emoji = "🟢" if result["signal"] == "BUY" else "🔴"
-        msg = (
-            f"{emoji} *{result['signal']} — {PAIR}*\n"
-            f"Price: `{result['price']:.5f}`\n"
-            f"RSI(14): `{result['rsi']:.1f}`\n"
-            f"{result['reason']}\n"
-            f"Bar: {result['bar_time']} ({INTERVAL})"
-        )
-        send_telegram(msg)
-        state["last_alert_bar_time"] = result["bar_time"]
-        save_state(state)
-        print("Alert sent.")
-    else:
-        print("No alert needed.")
+        print(f"[{pair} {INTERVAL}] bar={result['bar_time']} signal={result['signal']} "
+              f"price={result['price']} rsi={result['rsi']:.1f}")
+
+        pair_state = state.get(pair, {"last_alert_bar_time": None})
+        already_alerted = pair_state.get("last_alert_bar_time") == result["bar_time"]
+
+        if result["is_fresh_crossover"] and result["signal"] in ("BUY", "SELL") and not already_alerted:
+            emoji = "🟢" if result["signal"] == "BUY" else "🔴"
+            msg = (
+                f"{emoji} *{result['signal']} — {pair}*\n"
+                f"Price: `{result['price']:.5f}`\n"
+                f"RSI(14): `{result['rsi']:.1f}`\n"
+                f"{result['reason']}\n"
+                f"Bar: {result['bar_time']} ({INTERVAL})"
+            )
+            send_telegram(msg)
+            state[pair] = {"last_alert_bar_time": result["bar_time"]}
+            print(f"Alert sent for {pair}.")
+        else:
+            state[pair] = pair_state
+            print(f"No alert needed for {pair}.")
+
+    save_state(state)
+
+    if any_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
