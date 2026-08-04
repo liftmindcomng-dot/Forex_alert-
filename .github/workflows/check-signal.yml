@@ -26,7 +26,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STRATEGY_LABEL: "SWING"
-          FX_PAIRS: "EUR/USD,GBP/USD,USD/JPY,AUD/USD,XAU/USD"
+          FX_PAIRS: "EUR/USD,XAU/USD"
           FX_INTERVAL: "15min"
         run: python forex_alert.py
 
