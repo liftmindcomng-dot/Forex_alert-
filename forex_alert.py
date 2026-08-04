@@ -1,11 +1,14 @@
 """
-Checks an EMA(12/26) crossover + RSI(14) filter on one or more forex pairs
-using the Twelve Data API, and sends a Telegram message when a fresh BUY or
-SELL signal appears on any of them. Designed to be run on a schedule (e.g.
-every 15 minutes) by GitHub Actions — see .github/workflows/check-signal.yml.
+Checks an EMA crossover + RSI(14) filter on one or more forex pairs using
+the Twelve Data API, and sends a Telegram message when a fresh BUY or SELL
+signal appears on any of them. Designed to be run on a schedule by GitHub
+Actions. EMA periods, RSI thresholds, ATR multiples, state file, and the
+message label are all configurable via env vars — this lets the same
+script run as a "swing" profile or a "scalp" profile from two different
+workflow files.
 
-State (which bar we last alerted on, per pair) is kept in state.json so the
-same crossover doesn't trigger a repeat message on every run.
+State (which bar we last alerted on, per pair) is kept in a state file so
+the same crossover doesn't trigger a repeat message on every run.
 """
 
 import json
@@ -22,7 +25,20 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 # Comma-separated list, e.g. "EUR/USD,GBP/USD,USD/JPY"
 PAIRS = [p.strip() for p in os.environ.get("FX_PAIRS", "EUR/USD,GBP/USD,USD/JPY,AUD/USD,XAU/USD").split(",") if p.strip()]
 INTERVAL = os.environ.get("FX_INTERVAL", "15min")
-STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
+
+# Strategy tuning — lets one script run as either a slower "swing" profile
+# or a faster "scalp" profile, controlled entirely by workflow env vars.
+EMA_FAST = int(os.environ.get("EMA_FAST", "12"))
+EMA_SLOW = int(os.environ.get("EMA_SLOW", "26"))
+RSI_OVERBOUGHT = float(os.environ.get("RSI_OVERBOUGHT", "70"))
+RSI_OVERSOLD = float(os.environ.get("RSI_OVERSOLD", "30"))
+ATR_SL_MULT = float(os.environ.get("ATR_SL_MULT", "1.5"))
+ATR_TP_MULT = float(os.environ.get("ATR_TP_MULT", "3"))
+ATR_BE_MULT = float(os.environ.get("ATR_BE_MULT", "1.0"))
+STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "")  # e.g. "SCALP" or "SWING"
+
+STATE_FILENAME = os.environ.get("STATE_FILENAME", "state.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
 
 
 def fetch_series(pair, interval, outputsize=100):
@@ -90,7 +106,6 @@ def atr(highs, lows, closes, period=14):
         true_ranges.append(tr)
     if len(true_ranges) < period:
         return None
-    # Wilder's smoothing, same style as the RSI averaging above
     avg = sum(true_ranges[:period]) / period
     for tr in true_ranges[period:]:
         avg = (avg * (period - 1) + tr) / period
@@ -98,32 +113,34 @@ def atr(highs, lows, closes, period=14):
 
 
 def compute_signal(times, highs, lows, closes):
-    e12, e26, r14 = ema(closes, 12), ema(closes, 26), rsi(closes, 14)
+    e_fast, e_slow, r14 = ema(closes, EMA_FAST), ema(closes, EMA_SLOW), rsi(closes, 14)
     a14 = atr(highs, lows, closes, 14)
     n = len(closes)
-    last_price, last_e12, last_e26, last_rsi = closes[n-1], e12[n-1], e26[n-1], r14[n-1]
-    prev_e12, prev_e26 = e12[n-2], e26[n-2]
+    last_price, last_ef, last_es, last_rsi = closes[n-1], e_fast[n-1], e_slow[n-1], r14[n-1]
+    prev_ef, prev_es = e_fast[n-2], e_slow[n-2]
 
-    crossed_up = prev_e12 <= prev_e26 and last_e12 > last_e26
-    crossed_down = prev_e12 >= prev_e26 and last_e12 < last_e26
+    crossed_up = prev_ef <= prev_es and last_ef > last_es
+    crossed_down = prev_ef >= prev_es and last_ef < last_es
 
     sl = tp = be = None
-    if crossed_up and last_rsi < 70:
+    if crossed_up and last_rsi < RSI_OVERBOUGHT:
         signal, reason = "BUY", (
-            f"EMA12 crossed above EMA26 with RSI at {last_rsi:.1f} (below 70)."
+            f"EMA{EMA_FAST} crossed above EMA{EMA_SLOW} with RSI at {last_rsi:.1f} "
+            f"(below {RSI_OVERBOUGHT:.0f})."
         )
         if a14:
-            sl = last_price - 1.5 * a14
-            tp = last_price + 3 * a14
-            be = last_price + 1.0 * a14
-    elif crossed_down and last_rsi > 30:
+            sl = last_price - ATR_SL_MULT * a14
+            tp = last_price + ATR_TP_MULT * a14
+            be = last_price + ATR_BE_MULT * a14
+    elif crossed_down and last_rsi > RSI_OVERSOLD:
         signal, reason = "SELL", (
-            f"EMA12 crossed below EMA26 with RSI at {last_rsi:.1f} (above 30)."
+            f"EMA{EMA_FAST} crossed below EMA{EMA_SLOW} with RSI at {last_rsi:.1f} "
+            f"(above {RSI_OVERSOLD:.0f})."
         )
         if a14:
-            sl = last_price + 1.5 * a14
-            tp = last_price - 3 * a14
-            be = last_price - 1.0 * a14
+            sl = last_price + ATR_SL_MULT * a14
+            tp = last_price - ATR_TP_MULT * a14
+            be = last_price - ATR_BE_MULT * a14
     else:
         signal, reason = "HOLD", "No fresh crossover this bar."
 
@@ -132,8 +149,8 @@ def compute_signal(times, highs, lows, closes):
         "signal": signal,
         "reason": reason,
         "price": last_price,
-        "ema12": last_e12,
-        "ema26": last_e26,
+        "ema_fast": last_ef,
+        "ema_slow": last_es,
         "rsi": last_rsi,
         "atr": a14,
         "sl": sl,
@@ -148,7 +165,6 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
             data = json.load(f)
-        # migrate old single-pair format if present
         if "last_alert_bar_time" in data:
             return {PAIRS[0]: {"last_alert_bar_time": data["last_alert_bar_time"]}}
         return data
@@ -197,8 +213,9 @@ def main():
         if result["is_fresh_crossover"] and result["signal"] in ("BUY", "SELL") and not already_alerted:
             emoji = "🟢" if result["signal"] == "BUY" else "🔴"
             decimals = 3 if "JPY" in pair else 5
+            label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
             msg = (
-                f"{emoji} *{result['signal']} — {pair}*\n"
+                f"{emoji} *{label}{result['signal']} — {pair}*\n"
                 f"Price: `{result['price']:.{decimals}f}`\n"
                 f"RSI(14): `{result['rsi']:.1f}`\n"
             )
