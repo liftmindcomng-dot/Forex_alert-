@@ -4,7 +4,7 @@ on:
   schedule:
     # Every 15 minutes. Note: GitHub's scheduler can lag by a few minutes
     # under load — fine for a 15min/1h strategy, not for scalping.
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
