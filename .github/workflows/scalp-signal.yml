@@ -24,7 +24,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FX_PAIRS: "XAU/USD"
-          FX_INTERVAL: "5min"
+          FX_INTERVAL: "1min"
           EMA_FAST: "2"
           EMA_SLOW: "5"
           RSI_OVERBOUGHT: "80"
