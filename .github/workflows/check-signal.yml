@@ -28,8 +28,8 @@ jobs:
           STRATEGY_LABEL: "SWING"
           FX_PAIRS: "XAU/USD"
           FX_INTERVAL: "15min"
-          EMA_FAST: "5"
-          EMA_SLOW: "13"
+          EMA_FAST: "3"
+          EMA_SLOW: "8"
           RSI_OVERBOUGHT: "80"
           RSI_OVERSOLD: "20"
         run: python forex_alert.py
