@@ -27,9 +27,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STRATEGY_LABEL: "SWING"
           FX_PAIRS: "XAU/USD"
-          FX_INTERVAL: "15min"
-          EMA_FAST: "5"
-          EMA_SLOW: "10"
+          FX_INTERVAL: "5min"
+          EMA_FAST: "3"
+          EMA_SLOW: "8"
           RSI_OVERBOUGHT: "80"
           RSI_OVERSOLD: "20"
         run: python forex_alert.py
