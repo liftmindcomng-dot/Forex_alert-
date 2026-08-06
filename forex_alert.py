@@ -47,6 +47,7 @@ def fetch_series(pair, interval, outputsize=100):
         "interval": interval,
         "outputsize": outputsize,
         "apikey": API_KEY,
+        "timezone": "UTC",
     })
     with urllib.request.urlopen(url, timeout=20) as resp:
         data = json.loads(resp.read().decode())
