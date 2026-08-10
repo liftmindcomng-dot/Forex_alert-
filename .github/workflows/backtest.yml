@@ -21,6 +21,13 @@ jobs:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          BT_PAIR: "XAU/USD"
+          BT_PAIR: "EUR/USD"
           BT_CHUNKS: "6"
-        run: python backtest_smc.py
+          BT_INTERVAL: "5min"
+          BT_EMA_FAST: "2"
+          BT_EMA_SLOW: "5"
+          BT_RSI_OVERBOUGHT: "80"
+          BT_RSI_OVERSOLD: "20"
+          BT_ATR_SL_MULT: "1.5"
+          BT_ATR_TP_MULT: "3"
+        run: python backtest.py
