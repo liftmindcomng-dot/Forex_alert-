@@ -23,7 +23,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BT_PAIR: "EUR/USD"
           BT_CHUNKS: "6"
-          BT_INTERVAL: "15min"
+          BT_INTERVAL: "5min"
           BT_LOOKBACK: "20"
           BT_ATR_SL_MULT: "1.0"
           BT_ATR_TP_MULT: "1.0"
