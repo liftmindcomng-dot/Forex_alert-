@@ -21,7 +21,7 @@ jobs:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          BT_PAIR: "XAU/USD"
+          BT_PAIR: "EUR/USD"
           BT_CHUNKS: "6"
           BT_INTERVAL: "15min"
           BT_RSI_OVERSOLD: "30"
