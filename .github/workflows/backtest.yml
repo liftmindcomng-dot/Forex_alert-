@@ -1,7 +1,20 @@
-name: Run backtest
+name: Run SMC backtest
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: 'Pair to backtest'
+        default: 'XAU/USD'
+      interval:
+        description: 'Candle interval'
+        default: '5min'
+      chunks:
+        description: 'Number of 5000-bar chunks to fetch (6 = ~100+ trading days of 5min bars)'
+        default: '6'
+
+permissions:
+  contents: read
 
 jobs:
   backtest:
@@ -16,20 +29,13 @@ jobs:
       - name: Install dependencies
         run: pip install pandas
 
-      - name: Run backtest
+      - name: Run SMC backtest
         env:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          BT_PAIR: "EUR/USD"
-          BT_CHUNKS: "6"
-          BT_TREND_EMA_PERIOD: "50"
-          BT_SESSION_START_UTC: "12"
-          BT_SESSION_END_UTC: "16"
-          BT_EMA_FAST: "12"
-          BT_EMA_SLOW: "26"
-          BT_RSI_OVERBOUGHT: "70"
-          BT_RSI_OVERSOLD: "30"
-          BT_ATR_SL_MULT: "1.5"
-          BT_ATR_TP_MULT: "3"
-        run: python backtest_confluence.py
+        run: >
+          python backtest_smc.py
+          --pair "${{ inputs.pair }}"
+          --interval "${{ inputs.interval }}"
+          --chunks "${{ inputs.chunks }}"
