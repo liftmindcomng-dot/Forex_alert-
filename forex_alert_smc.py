@@ -1,186 +1,293 @@
 """
-Backtests the SMC/ICT signal logic in forex_alert.py (sweep + MSS/CHoCH
-+ required FVG or Order Block, on 5-minute candles) against a deep
-window of real historical data from Twelve Data.
+Smart Money Concepts (SMC/ICT) signal detector for XAU/USD (or any pair),
+using the Twelve Data API, and sends a Telegram message when a fresh BUY
+or SELL setup CONFIRMS on a freshly closed candle.
 
-Unlike a single time_series call (capped around 5,000 bars), this pages
-backward through multiple chunks using Twelve Data's `end_date` param,
-so you can backtest months of 5-minute data instead of just the last
-~17 days.
+A setup requires, all confirmed as of the same closed candle or the
+handful of candles immediately preceding it:
 
-Reuses the SAME compute_signal() function your live bot calls, imported
-directly from forex_alert.py — so the backtest and the live bot can
-never quietly drift out of sync with each other.
+  BUY:
+    1. Liquidity sweep BELOW a recent swing low (wick below, close back above)
+    2. Bullish MSS/CHoCH — close breaks back above the swing high that
+       formed the down-leg into the sweep
+    3. A bullish FVG OR a bullish Order Block present in that same
+       structural leg
 
-SETUP:
-    export TWELVE_DATA_API_KEY=your_real_key
-    export TELEGRAM_BOT_TOKEN=dummy
-    export TELEGRAM_CHAT_ID=dummy
+  SELL: the mirror image (sweep above a swing high, bearish MSS/CHoCH,
+  bearish FVG OR bearish Order Block)
 
-USAGE:
-    python backtest_smc.py --pair XAU/USD --interval 5min --chunks 6
-
-  --chunks controls how far back you go: each chunk pulls up to 5,000
-  bars, then the next chunk continues from where that one left off.
-  6 chunks of 5-minute bars is roughly 100+ trading days, depending on
-  market hours for the pair.
+No session filter — runs 24/5 alongside whatever market hours the pair
+trades.
 """
 
-import argparse
 import json
+import os
+import sys
 import time
 import urllib.request
 import urllib.parse
 
-from forex_alert_smc import API_KEY, compute_signal, RR_RATIO, send_telegram
+# ---- config (env vars, set as GitHub Actions secrets/variables) ----
+API_KEY = os.environ["TWELVE_DATA_API_KEY"]
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+PAIRS = [p.strip() for p in os.environ.get("FX_PAIRS", "XAU/USD").split(",") if p.strip()]
+INTERVAL = os.environ.get("FX_INTERVAL", "5min")
 
-CHUNK_SIZE = 5000
+SWING_LEFT = int(os.environ.get("SWING_LEFT", "2"))
+SWING_RIGHT = int(os.environ.get("SWING_RIGHT", "2"))
+MAX_LEG_CANDLES = int(os.environ.get("MAX_LEG_CANDLES", "12"))
+RR_RATIO = float(os.environ.get("RR_RATIO", "2.0"))
+SL_BUFFER_ATR_MULT = float(os.environ.get("SL_BUFFER_ATR_MULT", "0.1"))
+STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "SMC")
+
+STATE_FILENAME = os.environ.get("STATE_FILENAME", "state_smc.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
 
 
-def fetch_chunk(pair, interval, outputsize, end_date=None):
-    params = {"symbol": pair, "interval": interval, "outputsize": outputsize, "apikey": API_KEY}
-    if end_date:
-        params["end_date"] = end_date
-    url = "https://api.twelvedata.com/time_series?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url, timeout=30) as resp:
+def fetch_series(pair, interval, outputsize=150):
+    url = "https://api.twelvedata.com/time_series?" + urllib.parse.urlencode({
+        "symbol": pair,
+        "interval": interval,
+        "outputsize": outputsize,
+        "apikey": API_KEY,
+    })
+    with urllib.request.urlopen(url, timeout=20) as resp:
         data = json.loads(resp.read().decode())
     if "values" not in data:
         raise RuntimeError(f"Twelve Data error: {data.get('message', data)}")
-    return data["values"]
-
-
-def fetch_history(pair, interval, chunks):
-    """Pages backward through Twelve Data, oldest bars last, then we
-    reverse everything once at the end so the arrays run oldest->newest
-    just like forex_alert.py expects."""
-    all_rows = []
-    end_date = None
-    for i in range(chunks):
-        if i > 0:
-            time.sleep(8)  # stay under the free-tier 8 req/min limit
-        rows = fetch_chunk(pair, interval, CHUNK_SIZE, end_date)
-        if not rows:
-            break
-        all_rows.extend(rows)
-        end_date = rows[-1]["datetime"]
-        print(f"  Chunk {i + 1}/{chunks}: {len(rows)} bars, back to {end_date}")
-
-    # de-dupe (chunk boundaries can overlap by one bar) and sort oldest->newest
-    seen = {}
-    for r in all_rows:
-        seen[r["datetime"]] = r
-    rows_sorted = sorted(seen.values(), key=lambda r: r["datetime"])
-
-    times = [r["datetime"] for r in rows_sorted]
-    opens = [float(r["open"]) for r in rows_sorted]
-    highs = [float(r["high"]) for r in rows_sorted]
-    lows = [float(r["low"]) for r in rows_sorted]
-    closes = [float(r["close"]) for r in rows_sorted]
+    rows = list(reversed(data["values"]))
+    opens = [float(r["open"]) for r in rows]
+    highs = [float(r["high"]) for r in rows]
+    lows = [float(r["low"]) for r in rows]
+    closes = [float(r["close"]) for r in rows]
+    times = [r["datetime"] for r in rows]
     return times, opens, highs, lows, closes
 
 
-def simulate_trade(highs, lows, entry_i, signal, sl, tp, max_lookahead=200):
+def atr(highs, lows, closes, period=14):
+    n = len(closes)
+    true_ranges = []
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        true_ranges.append(tr)
+    if len(true_ranges) < period:
+        return None
+    avg = sum(true_ranges[:period]) / period
+    for tr in true_ranges[period:]:
+        avg = (avg * (period - 1) + tr) / period
+    return avg
+
+
+def find_swing_points(highs, lows, left, right):
+    swing_highs, swing_lows = [], []
     n = len(highs)
-    for j in range(entry_i + 1, min(entry_i + 1 + max_lookahead, n)):
-        if signal == "BUY":
-            hit_sl = lows[j] <= sl
-            hit_tp = highs[j] >= tp
-        else:
-            hit_sl = highs[j] >= sl
-            hit_tp = lows[j] <= tp
-        # Conservative: if both hit on the same bar, assume the worse
-        # outcome (SL) since we don't know the intrabar order.
-        if hit_sl:
-            return "LOSS"
-        if hit_tp:
-            return "WIN"
-    return "OPEN"
+    for i in range(left, n - right):
+        window_h = highs[i - left:i + right + 1]
+        if highs[i] == max(window_h) and window_h.count(highs[i]) == 1:
+            swing_highs.append((i, highs[i]))
+        window_l = lows[i - left:i + right + 1]
+        if lows[i] == min(window_l) and window_l.count(lows[i]) == 1:
+            swing_lows.append((i, lows[i]))
+    return swing_highs, swing_lows
+
+
+def last_before(points, idx):
+    candidates = [p for p in points if p[0] < idx]
+    return candidates[-1] if candidates else None
+
+
+def detect_fvg_in_range(opens, highs, lows, closes, start, end, bullish):
+    for i in range(max(start, 2), end + 1):
+        if bullish and highs[i - 2] < lows[i]:
+            return True
+        if not bullish and lows[i - 2] > highs[i]:
+            return True
+    return False
+
+
+def detect_order_block(opens, closes, impulse_start, impulse_end, bullish):
+    for i in range(impulse_start, max(impulse_start - 6, -1), -1):
+        is_red = closes[i] < opens[i]
+        is_green = closes[i] > opens[i]
+        if bullish and is_red:
+            return i
+        if not bullish and is_green:
+            return i
+    return None
+
+
+def compute_signal(times, opens, highs, lows, closes):
+    n = len(closes)
+    last_i = n - 1
+    a14 = atr(highs, lows, closes, 14)
+    swing_highs, swing_lows = find_swing_points(highs, lows, SWING_LEFT, SWING_RIGHT)
+
+    result_base = {
+        "bar_time": times[last_i],
+        "signal": "HOLD",
+        "reason": "No confirmed setup this bar.",
+        "price": closes[last_i],
+        "atr": a14,
+        "sl": None,
+        "tp": None,
+        "is_fresh_signal": False,
+    }
+
+    confirm_i = last_i
+
+    recent_swing_low = last_before(swing_lows, confirm_i)
+    if recent_swing_low:
+        sweep_i = None
+        for i in range(confirm_i, max(confirm_i - MAX_LEG_CANDLES, recent_swing_low[0]), -1):
+            if lows[i] < recent_swing_low[1] and closes[i] > recent_swing_low[1]:
+                sweep_i = i
+                break
+        if sweep_i is not None:
+            leg_high = last_before(swing_highs, sweep_i)
+            if leg_high:
+                mss_level = leg_high[1]
+                if closes[confirm_i] > mss_level:
+                    has_fvg = detect_fvg_in_range(opens, highs, lows, closes, sweep_i, confirm_i, bullish=True)
+                    ob_i = detect_order_block(opens, closes, sweep_i, confirm_i, bullish=True) if not has_fvg else None
+                    if has_fvg or ob_i is not None:
+                        entry = closes[confirm_i]
+                        buffer = (a14 or 0) * SL_BUFFER_ATR_MULT
+                        sl = lows[sweep_i] - buffer
+                        risk = entry - sl
+                        tp = entry + RR_RATIO * risk if risk > 0 else None
+                        tag = "FVG" if has_fvg else "Order Block"
+                        result_base.update({
+                            "signal": "BUY",
+                            "reason": (
+                                f"Liquidity swept below {recent_swing_low[1]:.2f}, bullish MSS "
+                                f"broke back above {mss_level:.2f}, confirmed by a bullish {tag}."
+                            ),
+                            "sl": sl,
+                            "tp": tp,
+                            "is_fresh_signal": True,
+                        })
+                        return result_base
+
+    recent_swing_high = last_before(swing_highs, confirm_i)
+    if recent_swing_high:
+        sweep_i = None
+        for i in range(confirm_i, max(confirm_i - MAX_LEG_CANDLES, recent_swing_high[0]), -1):
+            if highs[i] > recent_swing_high[1] and closes[i] < recent_swing_high[1]:
+                sweep_i = i
+                break
+        if sweep_i is not None:
+            leg_low = last_before(swing_lows, sweep_i)
+            if leg_low:
+                mss_level = leg_low[1]
+                if closes[confirm_i] < mss_level:
+                    has_fvg = detect_fvg_in_range(opens, highs, lows, closes, sweep_i, confirm_i, bullish=False)
+                    ob_i = detect_order_block(opens, closes, sweep_i, confirm_i, bullish=False) if not has_fvg else None
+                    if has_fvg or ob_i is not None:
+                        entry = closes[confirm_i]
+                        buffer = (a14 or 0) * SL_BUFFER_ATR_MULT
+                        sl = highs[sweep_i] + buffer
+                        risk = sl - entry
+                        tp = entry - RR_RATIO * risk if risk > 0 else None
+                        tag = "FVG" if has_fvg else "Order Block"
+                        result_base.update({
+                            "signal": "SELL",
+                            "reason": (
+                                f"Liquidity swept above {recent_swing_high[1]:.2f}, bearish MSS "
+                                f"broke back below {mss_level:.2f}, confirmed by a bearish {tag}."
+                            ),
+                            "sl": sl,
+                            "tp": tp,
+                            "is_fresh_signal": True,
+                        })
+                        return result_base
+
+    return result_base
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = urllib.parse.urlencode({
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+    }).encode()
+    req = urllib.request.Request(url, data=payload)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        resp.read()
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--pair", default="XAU/USD")
-    parser.add_argument("--interval", default="5min")
-    parser.add_argument("--chunks", type=int, default=6)
-    args = parser.parse_args()
+    state = load_state()
+    any_errors = False
 
-    print(f"Fetching {args.chunks} chunk(s) of {args.pair} at {args.interval}...")
-    times, opens, highs, lows, closes = fetch_history(args.pair, args.interval, args.chunks)
-    print(f"\nTotal: {len(times)} bars, {times[0]} to {times[-1]}\n")
+    for i, pair in enumerate(PAIRS):
+        if i > 0:
+            time.sleep(8)
 
-    trades = []
-    min_history = 30
-    last_alert_time = None
+        try:
+            times, opens, highs, lows, closes = fetch_series(pair, INTERVAL)
+            result = compute_signal(times, opens, highs, lows, closes)
+        except Exception as e:
+            print(f"ERROR [{pair}]: {e}", file=sys.stderr)
+            any_errors = True
+            continue
 
-    for i in range(min_history, len(closes)):
-        result = compute_signal(
-            times[:i + 1], opens[:i + 1], highs[:i + 1], lows[:i + 1], closes[:i + 1]
-        )
+        print(f"[{pair} {INTERVAL}] bar={result['bar_time']} signal={result['signal']} "
+              f"price={result['price']}")
 
-        if result["is_fresh_signal"] and result["signal"] in ("BUY", "SELL"):
-            if result["bar_time"] == last_alert_time:
-                continue
-            last_alert_time = result["bar_time"]
+        pair_state = state.get(pair, {"last_alert_bar_time": None})
+        already_alerted = pair_state.get("last_alert_bar_time") == result["bar_time"]
 
-            outcome = simulate_trade(highs, lows, i, result["signal"], result["sl"], result["tp"])
-            trades.append({
-                "time": result["bar_time"],
-                "signal": result["signal"],
-                "entry": result["price"],
-                "sl": result["sl"],
-                "tp": result["tp"],
-                "outcome": outcome,
-            })
+        if result["is_fresh_signal"] and result["signal"] in ("BUY", "SELL") and not already_alerted:
+            emoji = "\U0001F535" if result["signal"] == "BUY" else "\U0001F534"
+            decimals = 2
+            label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
+            msg = (
+                f"{emoji} *{label}{result['signal']} \u2014 {pair}*\n"
+                f"Entry: `{result['price']:.{decimals}f}`\n"
+            )
+            if result["sl"] is not None:
+                msg += (
+                    f"SL: `{result['sl']:.{decimals}f}`\n"
+                    f"TP: `{result['tp']:.{decimals}f}`\n"
+                )
+            msg += (
+                f"{result['reason']}\n"
+                f"Bar: {result['bar_time']} ({INTERVAL})"
+            )
+            send_telegram(msg)
+            state[pair] = {"last_alert_bar_time": result["bar_time"]}
+            print(f"Alert sent for {pair}.")
+        else:
+            state[pair] = pair_state
+            print(f"No alert needed for {pair}.")
 
-    wins = sum(1 for t in trades if t["outcome"] == "WIN")
-    losses = sum(1 for t in trades if t["outcome"] == "LOSS")
-    still_open = sum(1 for t in trades if t["outcome"] == "OPEN")
-    resolved = wins + losses
-    win_rate = (wins / resolved * 100) if resolved else 0
-    total_r = wins * RR_RATIO - losses * 1
-    expectancy = (total_r / resolved) if resolved else 0
+    save_state(state)
 
-    print("=" * 55)
-    print(f"BACKTEST RESULTS: {args.pair} {args.interval} (sweep + MSS/CHoCH + FVG-or-OB)")
-    print("=" * 55)
-    print(f"Total signals fired:     {len(trades)}")
-    print(f"Wins / Losses / Open:    {wins} / {losses} / {still_open}")
-    print(f"Win rate (resolved):     {win_rate:.1f}%")
-    print(f"Total R (win=+{RR_RATIO}R, loss=-1R): {total_r:+.1f}R")
-    print(f"Expectancy per trade:    {expectancy:+.2f}R")
-    print()
-    print("Trade log:")
-    for t in trades:
-        print(f"  {t['time']}  {t['signal']:4s}  entry={t['entry']:.2f}  "
-              f"sl={t['sl']:.2f}  tp={t['tp']:.2f}  -> {t['outcome']}")
-
-    span_days = None
-    try:
-        from datetime import datetime
-        fmt = "%Y-%m-%d %H:%M:%S"
-        span_days = (datetime.strptime(times[-1], fmt) - datetime.strptime(times[0], fmt)).days
-    except Exception:
-        pass
-
-    summary = (
-        f"\U0001F4CA *SMC Backtest \u2014 {args.pair}*\n"
-        f"5-min bars, sweep + MSS/CHoCH + required FVG-or-OB, fixed {RR_RATIO:.0f}R target\n"
-        f"No higher-timeframe bias filter.\n\n"
-        f"Period tested: {times[0]} to {times[-1]}"
-        + (f" (~{span_days} days)" if span_days is not None else "") + "\n"
-        f"Total signals: `{len(trades)}`\n"
-        f"Wins: `{wins}`  Losses: `{losses}`  Still open: `{still_open}`\n"
-        f"Win rate: `{win_rate:.1f}%`\n"
-        f"Total R: `{total_r:+.1f}R`\n"
-        f"Expectancy per trade: `{expectancy:+.2f}R`"
-    )
-    print("\nSending summary to Telegram...")
-    try:
-        send_telegram(summary)
-        print("Sent.")
-    except Exception as e:
-        print(f"Telegram send failed (results above are still valid): {e}")
+    if any_errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
