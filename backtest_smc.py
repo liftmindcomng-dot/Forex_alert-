@@ -1,48 +1,40 @@
 """
-Backtests a simplified, rules-based approximation of a 4H-bias /
-M15-liquidity-sweep-and-CHoCH strategy on real historical data, using
-pandas. This is a ROUGH APPROXIMATION of a discretionary strategy —
-several visually-judged steps (H1 key zones, exact "next liquidity pool"
-target) are simplified into fixed rules. Treat this result as a weaker
-signal than the earlier EMA backtest.
+Backtests the SMC/ICT signal logic in forex_alert.py (sweep + MSS/CHoCH
++ required FVG or Order Block, on 5-minute candles) against a deep
+window of real historical data from Twelve Data.
 
-Rules implemented:
-- 4H bias: swing-structure based (HH/HL = bullish, LH/LL = bearish),
-  using only 4H bars that have fully closed (no lookahead).
-- M15 swing points: 5-bar fractal, confirmed 2 bars after the extreme
-  (also no lookahead — a swing point isn't "known" until confirmed).
-- Liquidity sweep: price wicks beyond the most recent confirmed swing
-  point opposite the bias direction, then closes back inside it.
-- CHoCH confirmation: within a following window, price closes beyond
-  the most recent confirmed swing point in the bias direction.
-- Entry: close of the confirmation bar.
-- SL: the sweep bar's extreme (wick), small buffer.
-- TP: fixed 2R (approximates "next liquidity pool" — a real trader
-  would target a specific visual level instead).
+Unlike a single time_series call (capped around 5,000 bars), this pages
+backward through multiple chunks using Twelve Data's `end_date` param,
+so you can backtest months of 5-minute data instead of just the last
+~17 days.
 
-One trade watched at a time, per instrument, for simplicity.
+Reuses the SAME compute_signal() function your live bot calls, imported
+directly from forex_alert.py — so the backtest and the live bot can
+never quietly drift out of sync with each other.
+
+SETUP:
+    export TWELVE_DATA_API_KEY=your_real_key
+    export TELEGRAM_BOT_TOKEN=dummy
+    export TELEGRAM_CHAT_ID=dummy
+
+USAGE:
+    python backtest_smc.py --pair XAU/USD --interval 5min --chunks 6
+
+  --chunks controls how far back you go: each chunk pulls up to 5,000
+  bars, then the next chunk continues from where that one left off.
+  6 chunks of 5-minute bars is roughly 100+ trading days, depending on
+  market hours for the pair.
 """
 
+import argparse
 import json
-import os
-import sys
 import time
 import urllib.request
 import urllib.parse
 
-import pandas as pd
+from forex_alert import API_KEY, compute_signal, RR_RATIO, send_telegram
 
-API_KEY = os.environ["TWELVE_DATA_API_KEY"]
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-PAIR = os.environ.get("BT_PAIR", "XAU/USD")
-CHUNKS = int(os.environ.get("BT_CHUNKS", "6"))
 CHUNK_SIZE = 5000
-FRACTAL_WING = 2          # bars each side for swing detection
-CHOCH_WINDOW = 20          # bars to wait for confirmation after a sweep
-SL_BUFFER_ATR_MULT = 0.1  # small buffer beyond the sweep wick
-RR_TARGET = 2.0            # fixed R:R since we can't encode "next liquidity pool"
 
 
 def fetch_chunk(pair, interval, outputsize, end_date=None):
@@ -57,217 +49,138 @@ def fetch_chunk(pair, interval, outputsize, end_date=None):
     return data["values"]
 
 
-def fetch_history(interval):
+def fetch_history(pair, interval, chunks):
+    """Pages backward through Twelve Data, oldest bars last, then we
+    reverse everything once at the end so the arrays run oldest->newest
+    just like forex_alert.py expects."""
     all_rows = []
     end_date = None
-    for i in range(CHUNKS):
+    for i in range(chunks):
         if i > 0:
-            time.sleep(8)
-        rows = fetch_chunk(PAIR, interval, CHUNK_SIZE, end_date)
+            time.sleep(8)  # stay under the free-tier 8 req/min limit
+        rows = fetch_chunk(pair, interval, CHUNK_SIZE, end_date)
         if not rows:
             break
         all_rows.extend(rows)
         end_date = rows[-1]["datetime"]
-        print(f"Chunk {i+1}/{CHUNKS}: {len(rows)} bars, back to {end_date}")
+        print(f"  Chunk {i + 1}/{chunks}: {len(rows)} bars, back to {end_date}")
 
-    df = pd.DataFrame(all_rows).drop_duplicates(subset="datetime")
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    for col in ["open", "high", "low", "close"]:
-        df[col] = df[col].astype(float)
-    return df.sort_values("datetime").reset_index(drop=True)
+    # de-dupe (chunk boundaries can overlap by one bar) and sort oldest->newest
+    seen = {}
+    for r in all_rows:
+        seen[r["datetime"]] = r
+    rows_sorted = sorted(seen.values(), key=lambda r: r["datetime"])
 
-
-def find_swings(df):
-    """Returns two boolean columns: is_swing_high, is_swing_low (confirmed, no lookahead issue
-    IF you only use a swing at or after index + FRACTAL_WING)."""
-    n = len(df)
-    is_high = [False] * n
-    is_low = [False] * n
-    for i in range(FRACTAL_WING, n - FRACTAL_WING):
-        window_h = df["high"].iloc[i - FRACTAL_WING:i + FRACTAL_WING + 1]
-        window_l = df["low"].iloc[i - FRACTAL_WING:i + FRACTAL_WING + 1]
-        if df["high"].iloc[i] == window_h.max():
-            is_high[i] = True
-        if df["low"].iloc[i] == window_l.min():
-            is_low[i] = True
-    df["is_swing_high"] = is_high
-    df["is_swing_low"] = is_low
-    return df
+    times = [r["datetime"] for r in rows_sorted]
+    opens = [float(r["open"]) for r in rows_sorted]
+    highs = [float(r["high"]) for r in rows_sorted]
+    lows = [float(r["low"]) for r in rows_sorted]
+    closes = [float(r["close"]) for r in rows_sorted]
+    return times, opens, highs, lows, closes
 
 
-def compute_4h_bias(df_15m):
-    df_4h = df_15m.set_index("datetime").resample("4h").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last"}
-    ).dropna().reset_index()
-    df_4h = find_swings(df_4h)
-
-    swing_highs, swing_lows = [], []
-    bias_series = []
-    current_bias = None
-    for i in range(len(df_4h)):
-        if i >= FRACTAL_WING and df_4h["is_swing_high"].iloc[i - FRACTAL_WING]:
-            swing_highs.append(df_4h["high"].iloc[i - FRACTAL_WING])
-        if i >= FRACTAL_WING and df_4h["is_swing_low"].iloc[i - FRACTAL_WING]:
-            swing_lows.append(df_4h["low"].iloc[i - FRACTAL_WING])
-        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
-            if swing_highs[-1] > swing_highs[-2] and swing_lows[-1] > swing_lows[-2]:
-                current_bias = "bullish"
-            elif swing_highs[-1] < swing_highs[-2] and swing_lows[-1] < swing_lows[-2]:
-                current_bias = "bearish"
-        bias_series.append(current_bias)
-
-    df_4h["bias"] = bias_series
-    return df_4h[["datetime", "bias"]]
-
-
-def simulate(df):
-    df = find_swings(df)
-    bias_4h = compute_4h_bias(df)
-
-    df = pd.merge_asof(df, bias_4h.rename(columns={"datetime": "bias_time"}),
-                        left_on="datetime", right_on="bias_time", direction="backward")
-
-    confirmed_highs = []
-    confirmed_lows = []
-    trades = []
-    watching = None
-
-    n = len(df)
-    for i in range(FRACTAL_WING, n):
-        confirm_i = i - FRACTAL_WING
-        if df["is_swing_high"].iloc[confirm_i]:
-            confirmed_highs.append((confirm_i, df["high"].iloc[confirm_i]))
-        if df["is_swing_low"].iloc[confirm_i]:
-            confirmed_lows.append((confirm_i, df["low"].iloc[confirm_i]))
-
-        bias = df["bias"].iloc[i]
-        row = df.iloc[i]
-
-        if watching:
-            if watching["direction"] == "bearish":
-                watching["sweep_extreme"] = max(watching["sweep_extreme"], row["high"])
-            else:
-                watching["sweep_extreme"] = min(watching["sweep_extreme"], row["low"])
-
-            if i > watching["deadline_idx"]:
-                watching = None
-            else:
-                if watching["direction"] == "bullish" and confirmed_highs:
-                    target = confirmed_highs[-1][1]
-                    if row["close"] > target:
-                        entry = row["close"]
-                        sl = watching["sweep_extreme"] - SL_BUFFER_ATR_MULT * (entry * 0.001)
-                        risk = entry - sl
-                        tp = entry + RR_TARGET * risk
-                        trades.append({"i": i, "time": row["datetime"], "signal": "BUY",
-                                        "entry": entry, "sl": sl, "tp": tp})
-                        watching = None
-                elif watching["direction"] == "bearish" and confirmed_lows:
-                    target = confirmed_lows[-1][1]
-                    if row["close"] < target:
-                        entry = row["close"]
-                        sl = watching["sweep_extreme"] + SL_BUFFER_ATR_MULT * (entry * 0.001)
-                        risk = sl - entry
-                        tp = entry - RR_TARGET * risk
-                        trades.append({"i": i, "time": row["datetime"], "signal": "SELL",
-                                        "entry": entry, "sl": sl, "tp": tp})
-                        watching = None
-                continue
-
-        if bias == "bullish" and confirmed_lows:
-            recent_low = confirmed_lows[-1][1]
-            if row["low"] < recent_low and row["close"] > recent_low:
-                watching = {"direction": "bullish", "sweep_extreme": row["low"],
-                            "deadline_idx": i + CHOCH_WINDOW}
-        elif bias == "bearish" and confirmed_highs:
-            recent_high = confirmed_highs[-1][1]
-            if row["high"] > recent_high and row["close"] < recent_high:
-                watching = {"direction": "bearish", "sweep_extreme": row["high"],
-                            "deadline_idx": i + CHOCH_WINDOW}
-
-    resolved = []
-    for t in trades:
-        i = t["i"]
-        for j in range(i + 1, n):
-            bar = df.iloc[j]
-            if t["signal"] == "BUY":
-                hit_tp = bar["high"] >= t["tp"]
-                hit_sl = bar["low"] <= t["sl"]
-            else:
-                hit_tp = bar["low"] <= t["tp"]
-                hit_sl = bar["high"] >= t["sl"]
-            if hit_tp and hit_sl:
-                outcome, exitp = "Loss", t["sl"]
-                break
-            elif hit_tp:
-                outcome, exitp = "Win", t["tp"]
-                break
-            elif hit_sl:
-                outcome, exitp = "Loss", t["sl"]
-                break
+def simulate_trade(highs, lows, entry_i, signal, sl, tp, max_lookahead=200):
+    n = len(highs)
+    for j in range(entry_i + 1, min(entry_i + 1 + max_lookahead, n)):
+        if signal == "BUY":
+            hit_sl = lows[j] <= sl
+            hit_tp = highs[j] >= tp
         else:
-            continue
-        risk = abs(t["entry"] - t["sl"])
-        moved = (exitp - t["entry"]) if t["signal"] == "BUY" else (t["entry"] - exitp)
-        r = moved / risk if risk else 0
-        resolved.append({**t, "outcome": outcome, "exit": exitp, "r": r})
-
-    return pd.DataFrame(resolved)
-
-
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}).encode()
-    req = urllib.request.Request(url, data=payload)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        resp.read()
+            hit_sl = highs[j] >= sl
+            hit_tp = lows[j] <= tp
+        # Conservative: if both hit on the same bar, assume the worse
+        # outcome (SL) since we don't know the intrabar order.
+        if hit_sl:
+            return "LOSS"
+        if hit_tp:
+            return "WIN"
+    return "OPEN"
 
 
 def main():
-    print(f"Backtesting SMC-style sweep+CHoCH strategy on {PAIR}")
-    df = fetch_history("15min")
-    print(f"Fetched {len(df)} bars, {df['datetime'].min()} to {df['datetime'].max()}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pair", default="XAU/USD")
+    parser.add_argument("--interval", default="5min")
+    parser.add_argument("--chunks", type=int, default=6)
+    args = parser.parse_args()
 
-    trades = simulate(df)
+    print(f"Fetching {args.chunks} chunk(s) of {args.pair} at {args.interval}...")
+    times, opens, highs, lows, closes = fetch_history(args.pair, args.interval, args.chunks)
+    print(f"\nTotal: {len(times)} bars, {times[0]} to {times[-1]}\n")
 
-    if trades.empty:
-        msg = f"📊 *SMC Backtest — {PAIR}*\nNo trades were generated over the tested period."
-        print(msg)
-        send_telegram(msg)
-        return
+    trades = []
+    min_history = 30
+    last_alert_time = None
 
-    wins = (trades["outcome"] == "Win").sum()
-    losses = (trades["outcome"] == "Loss").sum()
-    total = len(trades)
-    win_rate = wins / total if total else 0
-    avg_r = trades["r"].mean()
-    total_r = trades["r"].sum()
-    span_days = (df["datetime"].max() - df["datetime"].min()).days
+    for i in range(min_history, len(closes)):
+        result = compute_signal(
+            times[:i + 1], opens[:i + 1], highs[:i + 1], lows[:i + 1], closes[:i + 1]
+        )
+
+        if result["is_fresh_signal"] and result["signal"] in ("BUY", "SELL"):
+            if result["bar_time"] == last_alert_time:
+                continue
+            last_alert_time = result["bar_time"]
+
+            outcome = simulate_trade(highs, lows, i, result["signal"], result["sl"], result["tp"])
+            trades.append({
+                "time": result["bar_time"],
+                "signal": result["signal"],
+                "entry": result["price"],
+                "sl": result["sl"],
+                "tp": result["tp"],
+                "outcome": outcome,
+            })
+
+    wins = sum(1 for t in trades if t["outcome"] == "WIN")
+    losses = sum(1 for t in trades if t["outcome"] == "LOSS")
+    still_open = sum(1 for t in trades if t["outcome"] == "OPEN")
+    resolved = wins + losses
+    win_rate = (wins / resolved * 100) if resolved else 0
+    total_r = wins * RR_RATIO - losses * 1
+    expectancy = (total_r / resolved) if resolved else 0
+
+    print("=" * 55)
+    print(f"BACKTEST RESULTS: {args.pair} {args.interval} (sweep + MSS/CHoCH + FVG-or-OB)")
+    print("=" * 55)
+    print(f"Total signals fired:     {len(trades)}")
+    print(f"Wins / Losses / Open:    {wins} / {losses} / {still_open}")
+    print(f"Win rate (resolved):     {win_rate:.1f}%")
+    print(f"Total R (win=+{RR_RATIO}R, loss=-1R): {total_r:+.1f}R")
+    print(f"Expectancy per trade:    {expectancy:+.2f}R")
+    print()
+    print("Trade log:")
+    for t in trades:
+        print(f"  {t['time']}  {t['signal']:4s}  entry={t['entry']:.2f}  "
+              f"sl={t['sl']:.2f}  tp={t['tp']:.2f}  -> {t['outcome']}")
+
+    span_days = None
+    try:
+        from datetime import datetime
+        fmt = "%Y-%m-%d %H:%M:%S"
+        span_days = (datetime.strptime(times[-1], fmt) - datetime.strptime(times[0], fmt)).days
+    except Exception:
+        pass
 
     summary = (
-        f"📊 *SMC-style Backtest — {PAIR}*\n"
-        f"4H bias + M15 liquidity sweep + CHoCH, fixed {RR_TARGET:.0f}R target\n"
-        f"⚠️ Simplified approximation — H1 key zones and exact TP targeting were "
-        f"dropped (too visual/judgment-based to encode). Treat as a weaker signal "
-        f"than a pure indicator backtest.\n\n"
-        f"Period tested: ~{span_days} days\n"
-        f"Total trades: `{total}`\n"
-        f"Wins: `{wins}`  Losses: `{losses}`\n"
-        f"Win rate: `{win_rate*100:.1f}%`\n"
-        f"Average R per trade: `{avg_r:+.2f}R`\n"
-        f"Total R (sum): `{total_r:+.2f}R`"
+        f"\U0001F4CA *SMC Backtest \u2014 {args.pair}*\n"
+        f"5-min bars, sweep + MSS/CHoCH + required FVG-or-OB, fixed {RR_RATIO:.0f}R target\n"
+        f"No higher-timeframe bias filter.\n\n"
+        f"Period tested: {times[0]} to {times[-1]}"
+        + (f" (~{span_days} days)" if span_days is not None else "") + "\n"
+        f"Total signals: `{len(trades)}`\n"
+        f"Wins: `{wins}`  Losses: `{losses}`  Still open: `{still_open}`\n"
+        f"Win rate: `{win_rate:.1f}%`\n"
+        f"Total R: `{total_r:+.1f}R`\n"
+        f"Expectancy per trade: `{expectancy:+.2f}R`"
     )
-    print(summary)
-    send_telegram(summary)
+    print("\nSending summary to Telegram...")
+    try:
+        send_telegram(summary)
+        print("Sent.")
+    except Exception as e:
+        print(f"Telegram send failed (results above are still valid): {e}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        try:
-            send_telegram(f"⚠️ SMC backtest error: {e}")
-        except Exception:
-            pass
-        sys.exit(1)
+    main()
