@@ -41,4 +41,4 @@ def fetch_chunk(pair, interval, outputsize, end_date=None):
     params = {"symbol": pair, "interval": interval, "outputsize": outputsize, "apikey": API_KEY}
     if end_date:
         params["end_date"] = end_date
-    url = "https://api.twelvedata.com/time_series?
+    url = "https://api.twelvedata.com/time_series?"
