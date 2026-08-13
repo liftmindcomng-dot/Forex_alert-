@@ -23,8 +23,13 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BT_PAIR: "EUR/USD"
           BT_CHUNKS: "6"
-          BT_INTERVAL: "5min"
-          BT_LOOKBACK: "20"
-          BT_ATR_SL_MULT: "1.0"
-          BT_ATR_TP_MULT: "1.0"
-        run: python backtest_breakout.py
+          BT_TREND_EMA_PERIOD: "50"
+          BT_SESSION_START_UTC: "12"
+          BT_SESSION_END_UTC: "16"
+          BT_EMA_FAST: "12"
+          BT_EMA_SLOW: "26"
+          BT_RSI_OVERBOUGHT: "70"
+          BT_RSI_OVERSOLD: "30"
+          BT_ATR_SL_MULT: "1.5"
+          BT_ATR_TP_MULT: "3"
+        run: python backtest_confluence.py
