@@ -2,7 +2,7 @@ name: Check scalp signal
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/3 * * * *"
   workflow_dispatch: {}
 
 permissions:
