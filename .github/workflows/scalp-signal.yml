@@ -29,9 +29,6 @@ jobs:
           EMA_SLOW: "5"
           RSI_OVERBOUGHT: "80"
           RSI_OVERSOLD: "20"
-          ATR_SL_MULT: "1.0"
-          ATR_TP_MULT: "2.0"
-          ATR_BE_MULT: "0.5"
           STATE_FILENAME: "state_scalp.json"
           STRATEGY_LABEL: "SCALP"
         run: python forex_alert.py
