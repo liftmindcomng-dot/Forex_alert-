@@ -23,7 +23,7 @@ jobs:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FX_PAIRS: "USD/JPY"
+          FX_PAIRS: "XAU/USD"
           FX_INTERVAL: "5min"
           EMA_FAST: "3"
           EMA_SLOW: "8"
