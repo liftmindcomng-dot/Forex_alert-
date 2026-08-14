@@ -25,8 +25,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FX_PAIRS: "USD/JPY"
           FX_INTERVAL: "5min"
-          EMA_FAST: "2"
-          EMA_SLOW: "5"
+          EMA_FAST: "3"
+          EMA_SLOW: "8"
           RSI_OVERBOUGHT: "80"
           RSI_OVERSOLD: "20"
           STATE_FILENAME: "state_scalp.json"
