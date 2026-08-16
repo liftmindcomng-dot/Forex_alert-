@@ -1,14 +1,11 @@
 """
-Checks an EMA crossover + RSI(14) filter on one or more forex pairs using
-the Twelve Data API, and sends a Telegram message when a fresh BUY or SELL
-signal appears on any of them. Designed to be run on a schedule by GitHub
-Actions. EMA periods, RSI thresholds, ATR multiples, state file, and the
-message label are all configurable via env vars — this lets the same
-script run as a "swing" profile or a "scalp" profile from two different
-workflow files.
+Checks an EMA(12/26) crossover + RSI(14) filter on one or more forex pairs
+using the Twelve Data API, and sends a Telegram message when a fresh BUY or
+SELL signal appears. Designed to be run on a schedule (e.g. every 15
+minutes) by GitHub Actions — see .github/workflows/check-signal.yml.
 
-State (which bar we last alerted on, per pair) is kept in a state file so
-the same crossover doesn't trigger a repeat message on every run.
+State (which bar we last alerted on, per pair) is kept in state.json so the
+same crossover doesn't trigger a repeat message on every run.
 """
 
 import json
@@ -17,6 +14,8 @@ import sys
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
+from datetime import datetime, timezone
 
 # ---- config (env vars, set as GitHub Actions secrets/variables) ----
 API_KEY = os.environ["TWELVE_DATA_API_KEY"]
@@ -30,8 +29,8 @@ INTERVAL = os.environ.get("FX_INTERVAL", "15min")
 # or a faster "scalp" profile, controlled entirely by workflow env vars.
 EMA_FAST = int(os.environ.get("EMA_FAST", "12"))
 EMA_SLOW = int(os.environ.get("EMA_SLOW", "26"))
-RSI_OVERBOUGHT = float(os.environ.get("RSI_OVERBOUGHT", "80"))
-RSI_OVERSOLD = float(os.environ.get("RSI_OVERSOLD", "20"))
+RSI_OVERBOUGHT = float(os.environ.get("RSI_OVERBOUGHT", "70"))
+RSI_OVERSOLD = float(os.environ.get("RSI_OVERSOLD", "30"))
 ATR_SL_MULT = float(os.environ.get("ATR_SL_MULT", "1.5"))
 ATR_TP_MULT = float(os.environ.get("ATR_TP_MULT", "3"))
 ATR_BE_MULT = float(os.environ.get("ATR_BE_MULT", "1.0"))
@@ -40,6 +39,28 @@ STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "")  # e.g. "SCALP" or "SWING"
 STATE_FILENAME = os.environ.get("STATE_FILENAME", "state.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
 
+# ---- broker symbol mapping ----
+# Twelve Data uses "EUR/USD" style symbols; your MT5 broker (Exness) uses
+# a suffixed style like "EURUSDm". Adjust SYMBOL_SUFFIX if your broker
+# uses a different suffix (some use no suffix, some use ".m", etc.) —
+# check your MT5 app's symbol list (Quotes tab) to confirm.
+SYMBOL_SUFFIX = os.environ.get("BROKER_SYMBOL_SUFFIX", "m")
+
+
+def to_broker_symbol(pair):
+    """'EUR/USD' -> 'EURUSDm', 'XAU/USD' -> 'XAUUSDm', etc."""
+    return pair.replace("/", "") + SYMBOL_SUFFIX
+
+# ---- MetaApi (MT5) demo auto-trade — OPTIONAL, off by default ----
+# IMPORTANT: unlike OANDA, MetaApi is broker-agnostic and works with any
+# MT5 account — demo or live. This script has NO way to verify which
+# type is linked. Safety here depends entirely on you making sure the
+# MT5 account you connect in the MetaApi dashboard is a DEMO account.
+AUTO_TRADE_ENABLED = os.environ.get("AUTO_TRADE_ENABLED", "false").lower() == "true"
+METAAPI_TOKEN = os.environ.get("METAAPI_TOKEN", "")
+METAAPI_ACCOUNT_ID = os.environ.get("METAAPI_ACCOUNT_ID", "")
+TRADE_LOT_SIZE = float(os.environ.get("TRADE_LOT_SIZE", "0.01"))  # small demo size
+
 
 def fetch_series(pair, interval, outputsize=100):
     url = "https://api.twelvedata.com/time_series?" + urllib.parse.urlencode({
@@ -47,7 +68,6 @@ def fetch_series(pair, interval, outputsize=100):
         "interval": interval,
         "outputsize": outputsize,
         "apikey": API_KEY,
-        "timezone": "UTC",
     })
     with urllib.request.urlopen(url, timeout=20) as resp:
         data = json.loads(resp.read().decode())
@@ -107,6 +127,7 @@ def atr(highs, lows, closes, period=14):
         true_ranges.append(tr)
     if len(true_ranges) < period:
         return None
+    # Wilder's smoothing, same style as the RSI averaging above
     avg = sum(true_ranges[:period]) / period
     for tr in true_ranges[period:]:
         avg = (avg * (period - 1) + tr) / period
@@ -166,6 +187,7 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
             data = json.load(f)
+        # migrate old single-pair format if present
         if "last_alert_bar_time" in data:
             return {PAIRS[0]: {"last_alert_bar_time": data["last_alert_bar_time"]}}
         return data
@@ -189,7 +211,75 @@ def send_telegram(text):
         resp.read()
 
 
+def place_demo_order(pair, signal, sl, tp):
+    """
+    Places a market order via MetaApi on whichever MT5 account is linked
+    to METAAPI_ACCOUNT_ID. Returns (success: bool, message: str) — never
+    raises, so one failed order never crashes the whole run.
+    """
+    if not (METAAPI_TOKEN and METAAPI_ACCOUNT_ID):
+        return False, "MetaApi credentials not set — skipped."
+
+    try:
+        import asyncio
+        from metaapi_cloud_sdk import MetaApi
+    except ImportError:
+        return False, "metaapi-cloud-sdk not installed."
+
+    symbol = to_broker_symbol(pair)  # e.g. "EUR/USD" -> "EURUSDm"
+
+    async def _place():
+        api = MetaApi(METAAPI_TOKEN)
+        account = await api.metatrader_account_api.get_account(METAAPI_ACCOUNT_ID)
+        await account.wait_connected()
+        connection = account.get_rpc_connection()
+        await connection.connect()
+        await connection.wait_synchronized()
+
+        kwargs = {}
+        if sl is not None:
+            kwargs["stop_loss"] = sl
+        if tp is not None:
+            kwargs["take_profit"] = tp
+
+        if signal == "BUY":
+            result = await connection.create_market_buy_order(symbol, TRADE_LOT_SIZE, **kwargs)
+        else:
+            result = await connection.create_market_sell_order(symbol, TRADE_LOT_SIZE, **kwargs)
+        return result
+
+    try:
+        result = asyncio.run(_place())
+        return True, f"Order result: {result}"
+    except Exception as e:
+        return False, f"MetaApi order failed: {e}"
+
+
+def is_forex_market_open():
+    """
+    Forex trades ~24hrs Mon-Fri, closed roughly Fri 22:00 UTC to Sun 22:00 UTC.
+    This is a simple approximation, not exact broker hours, but enough to
+    skip the weekend window where price feeds go stale/indicative and
+    produce false crossover signals on noise instead of real movement.
+    """
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # Monday=0 ... Sunday=6
+    hour = now.hour
+
+    if weekday == 5:  # Saturday — always closed
+        return False
+    if weekday == 4 and hour >= 22:  # Friday after 22:00 UTC
+        return False
+    if weekday == 6 and hour < 22:  # Sunday before 22:00 UTC
+        return False
+    return True
+
+
 def main():
+    if not is_forex_market_open():
+        print("Forex market is closed (weekend) — skipping this run to avoid false signals on stale data.")
+        return
+
     state = load_state()
     any_errors = False
 
@@ -233,6 +323,13 @@ def main():
                 f"Bar: {result['bar_time']} ({INTERVAL})"
             )
             send_telegram(msg)
+
+            if AUTO_TRADE_ENABLED:
+                filled, detail = place_demo_order(pair, result["signal"], result["sl"], result["tp"])
+                status = "✅ Demo order placed" if filled else "⚠️ Demo order NOT placed"
+                send_telegram(f"{status} — {pair}\n{detail}")
+                print(f"Demo trade [{pair}]: {status} — {detail}")
+
             state[pair] = {"last_alert_bar_time": result["bar_time"]}
             print(f"Alert sent for {pair}.")
         else:
