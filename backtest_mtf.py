@@ -267,16 +267,19 @@ def simulate(pair, df4h, df15, df5):
 
         outcome = "OPEN"
         resolve_minutes = None
+        resolve_time = None
         for m in range(entry_k + 1, min(entry_k + 1 + 500, n5)):
             hit_sl = (lows5[m] <= sl) if direction == "BUY" else (highs5[m] >= sl)
             hit_tp = (highs5[m] >= tp) if direction == "BUY" else (lows5[m] <= tp)
             if hit_sl:
                 outcome = "LOSS"
-                resolve_minutes = (pd.Timestamp(times5[m]) - pd.Timestamp(times5[entry_k])).total_seconds() / 60
+                resolve_time = times5[m]
+                resolve_minutes = (pd.Timestamp(resolve_time) - pd.Timestamp(times5[entry_k])).total_seconds() / 60
                 break
             if hit_tp:
                 outcome = "WIN"
-                resolve_minutes = (pd.Timestamp(times5[m]) - pd.Timestamp(times5[entry_k])).total_seconds() / 60
+                resolve_time = times5[m]
+                resolve_minutes = (pd.Timestamp(resolve_time) - pd.Timestamp(times5[entry_k])).total_seconds() / 60
                 break
 
         trades.append({
@@ -284,7 +287,22 @@ def simulate(pair, df4h, df15, df5):
             "sl": sl, "tp": tp, "outcome": outcome, "resolve_min": resolve_minutes,
         })
 
-        i = retest_i + 1
+        # IMPORTANT: don't look for a new setup until this trade is done.
+        # Advance the 15min index past the resolution time (or, if it
+        # never resolved within the lookahead window, past a cooldown)
+        # so the same breakout/retest can't spawn overlapping signals.
+        if resolve_time is not None:
+            advance_to = resolve_time
+        else:
+            advance_to = times5[min(entry_k + 500, n5 - 1)]
+        next_i = i
+        for idx in range(i, n15):
+            if times15[idx] >= advance_to:
+                next_i = idx
+                break
+        else:
+            next_i = n15
+        i = max(next_i, retest_i + 1)
 
     return pd.DataFrame(trades)
 
