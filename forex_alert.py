@@ -60,6 +60,7 @@ AUTO_TRADE_ENABLED = os.environ.get("AUTO_TRADE_ENABLED", "false").lower() == "t
 METAAPI_TOKEN = os.environ.get("METAAPI_TOKEN", "")
 METAAPI_ACCOUNT_ID = os.environ.get("METAAPI_ACCOUNT_ID", "")
 TRADE_LOT_SIZE = float(os.environ.get("TRADE_LOT_SIZE", "0.01"))  # small demo size
+MAX_CONCURRENT_TRADES = int(os.environ.get("MAX_CONCURRENT_TRADES", "1"))  # per pair
 
 
 def fetch_series(pair, interval, outputsize=100):
@@ -127,7 +128,6 @@ def atr(highs, lows, closes, period=14):
         true_ranges.append(tr)
     if len(true_ranges) < period:
         return None
-    # Wilder's smoothing, same style as the RSI averaging above
     avg = sum(true_ranges[:period]) / period
     for tr in true_ranges[period:]:
         avg = (avg * (period - 1) + tr) / period
@@ -187,7 +187,6 @@ def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
             data = json.load(f)
-        # migrate old single-pair format if present
         if "last_alert_bar_time" in data:
             return {PAIRS[0]: {"last_alert_bar_time": data["last_alert_bar_time"]}}
         return data
@@ -216,6 +215,9 @@ def place_demo_order(pair, signal, sl, tp):
     Places a market order via MetaApi on whichever MT5 account is linked
     to METAAPI_ACCOUNT_ID. Returns (success: bool, message: str) — never
     raises, so one failed order never crashes the whole run.
+
+    Skips placing if MAX_CONCURRENT_TRADES positions are already open on
+    this symbol.
     """
     if not (METAAPI_TOKEN and METAAPI_ACCOUNT_ID):
         return False, "MetaApi credentials not set — skipped."
@@ -236,6 +238,11 @@ def place_demo_order(pair, signal, sl, tp):
         await connection.connect()
         await connection.wait_synchronized()
 
+        positions = await connection.get_positions()
+        already_open = [p for p in positions if p.get("symbol") == symbol]
+        if len(already_open) >= MAX_CONCURRENT_TRADES:
+            return {"skipped": True, "reason": f"{len(already_open)} position(s) already open on {symbol} (limit: {MAX_CONCURRENT_TRADES})"}
+
         kwargs = {}
         if sl is not None:
             kwargs["stop_loss"] = sl
@@ -250,6 +257,8 @@ def place_demo_order(pair, signal, sl, tp):
 
     try:
         result = asyncio.run(_place())
+        if isinstance(result, dict) and result.get("skipped"):
+            return False, f"Skipped — {result['reason']}."
         return True, f"Order result: {result}"
     except Exception as e:
         return False, f"MetaApi order failed: {e}"
