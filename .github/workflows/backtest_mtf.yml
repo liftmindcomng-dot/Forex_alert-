@@ -5,7 +5,7 @@ on:
     inputs:
       pair:
         description: 'Pair to backtest'
-        default: 'XAU/USD'
+        default: 'EUR/USD'
       chunks:
         description: 'Number of 5000-bar chunks for 15min/5min data'
         default: '4'
