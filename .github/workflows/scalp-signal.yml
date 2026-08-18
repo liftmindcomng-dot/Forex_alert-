@@ -29,7 +29,6 @@ jobs:
           EMA_SLOW: "50"
           RSI_OVERBOUGHT: "70"
           RSI_OVERSOLD: "30"
-          RSI_LENGHT: "7"
           STATE_FILENAME: "state_scalp.json"
           STRATEGY_LABEL: "SCALP"
         run: python forex_alert.py
