@@ -25,10 +25,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FX_PAIRS: "GBP/USD"
           FX_INTERVAL: "5min"
-          EMA_FAST: "3"
-          EMA_SLOW: "8"
-          RSI_OVERBOUGHT: "80"
-          RSI_OVERSOLD: "20"
+          EMA_FAST: "9"
+          EMA_SLOW: "50"
+          RSI_OVERBOUGHT: "70"
+          RSI_OVERSOLD: "30"
+          RSI_LENGHT: "7"
           STATE_FILENAME: "state_scalp.json"
           STRATEGY_LABEL: "SCALP"
         run: python forex_alert.py
