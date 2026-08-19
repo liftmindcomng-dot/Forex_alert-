@@ -27,8 +27,8 @@ jobs:
           FX_INTERVAL: "5min"
           EMA_FAST: "12"
           EMA_SLOW: "26"
-          RSI_OVERBOUGHT: "14"
-          RSI_OVERSOLD: "50"
+          RSI_OVERBOUGHT: "60"
+          RSI_OVERSOLD: "40"
           STATE_FILENAME: "state_scalp.json"
           STRATEGY_LABEL: "SCALP"
         run: python forex_alert.py
