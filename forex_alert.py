@@ -102,6 +102,11 @@ API_CALL_SLEEP = float(os.environ.get("API_CALL_SLEEP_SECONDS", "8"))
 TREND_CACHE_MINUTES = int(os.environ.get("TREND_CACHE_MINUTES", "230"))       # ~4H bar (240min)
 STRUCTURE_CACHE_MINUTES = int(os.environ.get("STRUCTURE_CACHE_MINUTES", "50"))  # override per workflow (~12 for 15min, ~50 for 1h)
 
+# Send a candlestick chart image (with entry/SL/TP marked) instead of a
+# plain text alert. Falls back to text if chart generation/send fails.
+CHART_ENABLED = os.environ.get("CHART_ENABLED", "true").lower() == "true"
+CHART_CANDLES = int(os.environ.get("CHART_CANDLES", "40"))
+
 # For ENTRY_MODE=structure only (order block + session filter):
 OB_LOOKBACK = int(os.environ.get("OB_LOOKBACK", "15"))
 REJECTION_WICK_RATIO = float(os.environ.get("REJECTION_WICK_RATIO", "0.5"))
@@ -436,6 +441,63 @@ def send_telegram(text):
         resp.read()
 
 
+def generate_chart(pair, opens, highs, lows, closes, bias, signal, entry, sl, tps, num_candles=40):
+    """Candlestick chart of the last `num_candles` entry-timeframe bars,
+    with entry/SL/TP levels drawn as horizontal lines. Requires
+    matplotlib (imported lazily so it's only needed when charts are on)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(closes)
+    start = max(0, n - num_candles)
+    count = n - start
+
+    fig, ax = plt.subplots(figsize=(9, 5), dpi=120)
+    for i in range(start, n):
+        x = i - start
+        up = closes[i] >= opens[i]
+        color = "#26a69a" if up else "#ef5350"
+        ax.plot([x, x], [lows[i], highs[i]], color=color, linewidth=1)
+        body_low, body_high = min(opens[i], closes[i]), max(opens[i], closes[i])
+        height = max(body_high - body_low, (highs[i] - lows[i]) * 0.02 or 0.00001)
+        ax.add_patch(plt.Rectangle((x - 0.3, body_low), 0.6, height, color=color))
+
+    ax.axhline(entry, color="#2962ff", linestyle="--", linewidth=1)
+    ax.text(count - 1, entry, " Entry", va="center", fontsize=7, color="#2962ff")
+    ax.axhline(sl, color="#d500f9", linestyle="--", linewidth=1)
+    ax.text(count - 1, sl, " SL", va="center", fontsize=7, color="#d500f9")
+    for idx, tp in enumerate(tps, start=1):
+        ax.axhline(tp, color="#43a047", linestyle=":", linewidth=0.8)
+        ax.text(count - 1, tp, f" TP{idx}", va="center", fontsize=7, color="#43a047")
+
+    ax.set_title(f"{pair} — {signal} ({bias})", fontsize=10)
+    ax.set_xlim(-1, count)
+    ax.set_xticks([])
+    fig.tight_layout()
+
+    safe_pair = pair.replace("/", "")
+    path = f"/tmp/chart_{safe_pair}_{int(time.time())}.png"
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def send_telegram_photo(image_path, caption):
+    """Sends a chart image with the alert text as the caption. Requires
+    `requests` (imported lazily, same reasoning as generate_chart)."""
+    import requests
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    with open(image_path, "rb") as f:
+        resp = requests.post(
+            url,
+            data={"chat_id": CHAT_ID, "caption": caption[:1024], "parse_mode": "Markdown"},
+            files={"photo": f},
+            timeout=30,
+        )
+    resp.raise_for_status()
+
+
 def place_demo_order(pair, signal, sl, tp1):
     """
     Places a market order via MetaApi on whichever MT5 account is linked
@@ -629,7 +691,7 @@ def process_pair(pair, state):
         print(f"[{pair}] Invalid R (SL on wrong side of entry) — skipping alert.")
         return
 
-    decimals = 3 if "JPY" in pair else 5
+    decimals = 3 if "JPY" in pair else (2 if "XAU" in pair else 5)
     label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
     emoji = "🟢" if signal == "BUY" else "🔴"
     mode_desc = {
@@ -650,7 +712,16 @@ def process_pair(pair, state):
         f"No fixed time stop — manage by structure.\n"
         f"Bar: {times5[-1]} ({TF_ENTRY})"
     )
-    send_telegram(msg)
+    if CHART_ENABLED:
+        try:
+            chart_path = generate_chart(pair, opens5, highs5, lows5, closes5, bias, signal, entry, sl, tps, CHART_CANDLES)
+            send_telegram_photo(chart_path, msg)
+            os.remove(chart_path)
+        except Exception as e:
+            print(f"[{pair}] Chart send failed ({e}) — falling back to text alert.")
+            send_telegram(msg)
+    else:
+        send_telegram(msg)
     print(f"Entry alert sent for {pair}.")
 
     if AUTO_TRADE_ENABLED:
