@@ -1,13 +1,9 @@
 name: Check forex signal (Swing)
 
 on:
-  schedule:
-    # Every 5 minutes. Only viable on the free tier because forex_alert.py
-    # caches the 4H/1H fetches — only the 5M candle is fetched every run.
-    # FX_PAIRS is a single pair for the same reason: the combined daily
-    # budget across both workflows is the binding constraint.
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
+  # Triggered externally via cron-job.org calling the GitHub API
+  # (workflow_dispatch), not GitHub's native schedule — see setup notes.
 
 permissions:
   contents: write
