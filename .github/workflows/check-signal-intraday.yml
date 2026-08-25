@@ -1,16 +1,9 @@
 name: Check forex signal (Intraday)
 
 on:
-  schedule:
-    # Every 5 minutes, matching the 5M entry timeframe. Only viable on
-    # the free tier because forex_alert.py caches the 4H/15M fetches
-    # (TREND_CACHE_MINUTES / STRUCTURE_CACHE_MINUTES below) — only the
-    # 5M candle is fetched every run. This is why FX_PAIRS is a single
-    # pair: 4H+1H fetches still add up daily, and running 2+ pairs on
-    # this schedule (even cached) exceeds the 800/day cap when Swing is
-    # also running.
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
+  # Triggered externally via cron-job.org calling the GitHub API
+  # (workflow_dispatch), not GitHub's native schedule — see setup notes.
 
 permissions:
   contents: write
