@@ -61,4 +61,3 @@ jobs:
           git add state_swing.json
           git diff --quiet --cached || git commit -m "Update swing signal state [skip ci]"
           git pull --rebase && git push
-bt
