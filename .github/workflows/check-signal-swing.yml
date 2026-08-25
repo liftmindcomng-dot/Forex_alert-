@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install metaapi-cloud-sdk
+        run: pip install metaapi-cloud-sdk matplotlib requests
 
       - name: Run swing signal check
         env:
