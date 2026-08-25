@@ -28,7 +28,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STRATEGY_LABEL: "SWING"
           STATE_FILENAME: "state_swing.json"
-          FX_PAIRS: "EUR/USD"
+          FX_PAIRS: "XAU/USD"
           TF_TREND: "4h"
           TF_STRUCTURE: "1h"            # SMC style uses 1H for structure/order-block, not 15M
           TF_ENTRY: "5min"
