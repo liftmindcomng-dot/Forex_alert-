@@ -1,0 +1,64 @@
+name: Check forex signal (Intraday)
+
+on:
+  schedule:
+    # Every 5 minutes, matching the 5M entry timeframe. Only viable on
+    # the free tier because forex_alert.py caches the 4H/15M fetches
+    # (TREND_CACHE_MINUTES / STRUCTURE_CACHE_MINUTES below) — only the
+    # 5M candle is fetched every run. This is why FX_PAIRS is a single
+    # pair: 4H+1H fetches still add up daily, and running 2+ pairs on
+    # this schedule (even cached) exceeds the 800/day cap when Swing is
+    # also running.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install metaapi-cloud-sdk
+
+      - name: Run intraday signal check
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STRATEGY_LABEL: "INTRADAY"
+          STATE_FILENAME: "state_intraday.json"
+          FX_PAIRS: "EUR/USD"
+          TF_TREND: "4h"
+          TF_STRUCTURE: "15min"
+          TF_ENTRY: "5min"
+          TREND_CACHE_MINUTES: "230"
+          STRUCTURE_CACHE_MINUTES: "12"  # under the 15min bar so a fresh fetch happens every bar
+          SWING_LOOKBACK: "2"
+          SL_BUFFER_ATR_MULT: "0.15"
+          ENTRY_MODE: "retest_or_pullback"  # breakout+retest OR pullback — either confirms
+          RETEST_TOLERANCE_ATR_MULT: "0.3"
+          SWING_ENTRY_MODE: "false"         # pullback fallback uses shallow (first valid) pullback, not deep retrace
+          TP_MULTIPLES: "1,2,3,4,5"
+          AUTO_TRADE_ENABLED: "false"
+          METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+          METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+          TRADE_LOT_SIZE: "0.01"
+          MAX_CONCURRENT_TRADES: "1"
+          BROKER_SYMBOL_SUFFIX: "m"
+        run: python forex_alert.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "forex-alert-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state_intraday.json
+          git diff --quiet --cached || git commit -m "Update intraday signal state [skip ci]"
+          git pull --rebase && git push
