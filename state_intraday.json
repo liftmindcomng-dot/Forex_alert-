@@ -19,17 +19,20 @@
       "fetched_at": "2026-08-26T11:40:25.964523+00:00"
     },
     "setup": {
-      "bos_level": 4622.78107,
-      "pullback_zone": 4639.37514,
-      "confirmed": true,
-      "last_entry_bar_time": "2026-08-26 09:30:00"
+      "bos_level": 4616.59203,
+      "pullback_zone": 4631.13046,
+      "confirmed": false
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4616.59203,
+        4631.13046,
+        142
+      ],
       "ob": null,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-08-26T12:50:27.792675+00:00"
+      "fetched_at": "2026-08-26T13:10:23.348195+00:00"
     }
   }
 }
