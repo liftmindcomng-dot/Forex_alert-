@@ -29,17 +29,10 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4634.24324,
-        4673.71074,
-        133
-      ],
-      "ob": {
-        "high": 4673.55237,
-        "low": 4656.14378
-      },
+      "bos": null,
+      "ob": null,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-08-26T16:40:23.559034+00:00"
+      "fetched_at": "2026-08-26T17:30:42.253015+00:00"
     }
   }
 }
