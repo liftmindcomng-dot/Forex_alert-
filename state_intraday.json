@@ -26,14 +26,10 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4622.78107,
-        4639.37514,
-        144
-      ],
+      "bos": null,
       "ob": null,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-08-26T09:35:25.719449+00:00"
+      "fetched_at": "2026-08-26T09:50:24.987555+00:00"
     }
   }
 }
