@@ -1,17 +1,21 @@
 """
-backtestscalpnew.py
-One-off historical backtest for the SCALP strategy config (4H bias -> 15M
-structure -> 5M sweep+retest/pullback entry). Pulls the max free-tier
-history in a single call per timeframe (outputsize=5000) and walks forward
-bar-by-bar on the entry timeframe, simulating each signal against a single
-target (TP_MULTIPLES[0]) vs. the stop.
+backtest.py
+One-off historical backtest for the SCALP strategy config. 4H bias is now
+a SOFT filter (only blocks trades directly against it; doesn't need to
+confirm), 15M structure (BOS/CHoCH) is the main directional gate, 5M
+sweep+retest/pullback is the entry trigger. Exits are FIXED PIPS, not
+ATR/R-multiples, since the goal is small scalps (e.g. 10-30 pips).
 
-SIMPLIFICATION: this checks only the FIRST take-profit level, not your
-full multi-TP scale-out. It answers "does the entry logic have edge?"
-before you build the more complex partial-exit simulation.
+PIP CONVENTION: 1 pip = $0.10 on XAUUSD (i.e. 10-30 pips = $1.00-$3.00
+move). If your broker uses 1 pip = $0.01, set PIP_SIZE=0.01 in env.
+
+SIMPLIFICATION: this checks only ONE take-profit level per trade (volatility-
+scaled, not a fixed number), not a full multi-target scale-out. It answers
+"does the entry logic have edge at these distances?" before building the
+partial-exit simulation.
 
 Run as a one-off GitHub Actions workflow_dispatch job. Sends a summary to
-Telegram and prints full detail to the Actions log.
+Telegram and prints full detail (including funnel diagnostics) to the log.
 """
 
 import os
@@ -29,14 +33,29 @@ TF_STRUCTURE = os.environ.get("TF_STRUCTURE", "15min")
 TF_ENTRY = os.environ.get("TF_ENTRY", "5min")
 
 SWING_LOOKBACK = int(os.environ.get("SWING_LOOKBACK", "2"))
-SL_BUFFER_ATR_MULT = float(os.environ.get("SL_BUFFER_ATR_MULT", "0.08"))
 ENTRY_MODE = os.environ.get("ENTRY_MODE", "retest_or_pullback")
-RETEST_TOLERANCE_ATR_MULT = float(os.environ.get("RETEST_TOLERANCE_ATR_MULT", "0.15"))
+RETEST_TOLERANCE_ATR_MULT = float(os.environ.get("RETEST_TOLERANCE_ATR_MULT", "0.25"))
 SWING_ENTRY_MODE = os.environ.get("SWING_ENTRY_MODE", "false").lower() == "true"
-ENTRY_EXPIRY_BARS = int(os.environ.get("ENTRY_EXPIRY_BARS", "3"))  # entry-TF bars, not minutes
+ENTRY_EXPIRY_BARS = int(os.environ.get("ENTRY_EXPIRY_BARS", "5"))  # entry-TF bars, not minutes
 
-TP_MULTIPLES = [float(x) for x in os.environ.get("TP_MULTIPLES", "0.5,1,1.5,2").split(",")]
-TARGET_R = TP_MULTIPLES[0]  # single-target simplification
+PIP_SIZE = float(os.environ.get("PIP_SIZE", "0.10"))  # $ per pip on XAUUSD — confirm vs your broker
+
+# TP/SL now scale with current ATR (volatility) instead of being fixed —
+# bigger target in a fast market, smaller in a quiet one — but clamped to
+# a pip floor/ceiling so it stays a scalp rather than drifting into swing
+# territory or shrinking below what the spread would eat.
+TP_ATR_MULT = float(os.environ.get("TP_ATR_MULT", "1.2"))
+TP_MIN_PIPS = float(os.environ.get("TP_MIN_PIPS", "10"))
+TP_MAX_PIPS = float(os.environ.get("TP_MAX_PIPS", "30"))
+
+SL_ATR_MULT = float(os.environ.get("SL_ATR_MULT", "0.5"))
+SL_MIN_PIPS = float(os.environ.get("SL_MIN_PIPS", "6"))
+SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "15"))
+
+# Bias is now a SOFT filter: a setup is only blocked if bias actively
+# opposes it. Set BIAS_HARD_GATE=true to restore the old strict behavior
+# (bias must actively confirm structure, like the original scalp config).
+BIAS_HARD_GATE = os.environ.get("BIAS_HARD_GATE", "false").lower() == "true"
 
 ATR_PERIOD = int(os.environ.get("ATR_PERIOD", "14"))
 BIAS_EMA_FAST = int(os.environ.get("BIAS_EMA_FAST", "20"))
@@ -86,6 +105,15 @@ def atr(candles, period=ATR_PERIOD):
         h, l, prev_c = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
         trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
     return sum(trs[-period:]) / period
+
+
+def clamp_pips(atr_val, mult, min_pips, max_pips):
+    """ATR-scaled distance in price terms, clamped to a pip floor/ceiling."""
+    if not atr_val:
+        return min_pips * PIP_SIZE
+    raw_pips = (atr_val * mult) / PIP_SIZE
+    clamped_pips = max(min_pips, min(max_pips, raw_pips))
+    return clamped_pips * PIP_SIZE
 
 
 def find_last_swing(candles, swing_bars):
@@ -144,6 +172,10 @@ def run_backtest(trend_candles, structure_candles, entry_candles):
     bias = "neutral"
     structure = "none"
 
+    counts = {"bars": 0, "bias_bullish": 0, "bias_bearish": 0, "bias_neutral": 0,
+              "structure_aligned": 0, "sweeps_detected": 0, "sweeps_expired": 0,
+              "retest_checks": 0, "signals_fired": 0}
+
     for ei in range(BIAS_SWING_LOOKBACK, len(entry_candles)):
         now = entry_candles[ei]["time"]
 
@@ -159,22 +191,36 @@ def run_backtest(trend_candles, structure_candles, entry_candles):
         if si >= SWING_LOOKBACK * 2 + 5:
             structure = compute_structure(structure_candles[:si + 1], bias)
 
+        counts["bars"] += 1
+        counts[f"bias_{bias}"] += 1
+
         window = entry_candles[max(0, ei - 60):ei + 1]
         atr_val = atr(window)
         swing_high, swing_low = find_last_swing(window, SWING_LOOKBACK)
 
         last = entry_candles[ei]
-        want_long = bias == "bullish" and structure in ("bos_bull", "choch_bull")
-        want_short = bias == "bearish" and structure in ("bos_bear", "choch_bear")
+        if BIAS_HARD_GATE:
+            want_long = bias == "bullish" and structure in ("bos_bull", "choch_bull")
+            want_short = bias == "bearish" and structure in ("bos_bear", "choch_bear")
+        else:
+            # soft gate: structure alone qualifies a setup; bias only
+            # vetoes it when directly opposed
+            want_long = structure in ("bos_bull", "choch_bull") and bias != "bearish"
+            want_short = structure in ("bos_bear", "choch_bear") and bias != "bullish"
+        if want_long or want_short:
+            counts["structure_aligned"] += 1
 
         # detect sweep
         if swing_low is not None and want_long and last["low"] < swing_low < last["close"]:
             sweep = {"direction": "long", "level": swing_low, "bar_index": ei}
+            counts["sweeps_detected"] += 1
         if swing_high is not None and want_short and last["high"] > swing_high > last["close"]:
             sweep = {"direction": "short", "level": swing_high, "bar_index": ei}
+            counts["sweeps_detected"] += 1
 
         # check entry off an active sweep
         if sweep and ei - sweep["bar_index"] <= ENTRY_EXPIRY_BARS and ei > sweep["bar_index"]:
+            counts["retest_checks"] += 1
             tolerance = RETEST_TOLERANCE_ATR_MULT * (atr_val or 0)
             direction, level = sweep["direction"], sweep["level"]
             near_level = abs(last["close"] - level) <= tolerance
@@ -199,28 +245,36 @@ def run_backtest(trend_candles, structure_candles, entry_candles):
             if fired:
                 trade_dir, ref_level = fired
                 entry_price = last["close"]
-                sl_buffer = SL_BUFFER_ATR_MULT * (atr_val or 0)
+                sl_buffer = clamp_pips(atr_val, SL_ATR_MULT, SL_MIN_PIPS, SL_MAX_PIPS)
+                tp_dist = clamp_pips(atr_val, TP_ATR_MULT, TP_MIN_PIPS, TP_MAX_PIPS)
                 if trade_dir == "buy":
                     sl = ref_level - sl_buffer
+                    tp = entry_price + tp_dist
                     risk = entry_price - sl
-                    tp = entry_price + risk * TARGET_R
                 else:
                     sl = ref_level + sl_buffer
+                    tp = entry_price - tp_dist
                     risk = sl - entry_price
-                    tp = entry_price - risk * TARGET_R
 
                 if risk > 0:
-                    result_r, outcome = simulate_trade(entry_candles, ei, trade_dir, sl, tp, entry_price, risk)
-                    trades.append({"time": str(now), "direction": trade_dir, "r": result_r, "outcome": outcome})
+                    target_pips = tp_dist / PIP_SIZE
+                    result_pips, outcome = simulate_trade(entry_candles, ei, trade_dir, sl, tp, entry_price, target_pips)
+                    trades.append({"time": str(now), "direction": trade_dir, "pips": result_pips, "outcome": outcome})
+                    counts["signals_fired"] += 1
                 sweep = None  # consume it either way
 
         elif sweep and ei - sweep["bar_index"] > ENTRY_EXPIRY_BARS:
+            counts["sweeps_expired"] += 1
             sweep = None
+
+    print("Funnel diagnostics:")
+    for k, v in counts.items():
+        print(f"  {k}: {v}")
 
     return trades
 
 
-def simulate_trade(entry_candles, start_index, direction, sl, tp, entry_price, risk):
+def simulate_trade(entry_candles, start_index, direction, sl, tp, entry_price, target_pips):
     for j in range(start_index + 1, min(start_index + 1 + MAX_HOLD_BARS, len(entry_candles))):
         c = entry_candles[j]
         if direction == "buy":
@@ -231,16 +285,18 @@ def simulate_trade(entry_candles, start_index, direction, sl, tp, entry_price, r
             hit_tp = c["low"] <= tp
 
         if hit_sl and hit_tp:
-            return -1.0, "sl_and_tp_same_bar_conservative_loss"
+            sl_pips = abs(entry_price - sl) / PIP_SIZE
+            return -sl_pips, "sl_and_tp_same_bar_conservative_loss"
         if hit_sl:
-            return -1.0, "sl"
+            sl_pips = abs(entry_price - sl) / PIP_SIZE
+            return -sl_pips, "sl"
         if hit_tp:
-            return TARGET_R, "tp"
+            return target_pips, "tp"
 
     # timed out — mark to market at last available bar
     last_close = entry_candles[min(start_index + MAX_HOLD_BARS, len(entry_candles) - 1)]["close"]
-    r = (last_close - entry_price) / risk if direction == "buy" else (entry_price - last_close) / risk
-    return r, "timeout"
+    pips = (last_close - entry_price) / PIP_SIZE if direction == "buy" else (entry_price - last_close) / PIP_SIZE
+    return pips, "timeout"
 
 
 # ==================== STATS ====================
@@ -249,35 +305,36 @@ def summarize(trades):
         return "No signals fired over the backtest window."
 
     decided = [t for t in trades if t["outcome"] in ("tp", "sl")]
-    wins = [t for t in decided if t["r"] > 0]
-    losses = [t for t in decided if t["r"] <= 0]
+    wins = [t for t in decided if t["pips"] > 0]
+    losses = [t for t in decided if t["pips"] <= 0]
     timeouts = [t for t in trades if t["outcome"] == "timeout"]
 
-    total_r = sum(t["r"] for t in trades)
-    avg_r = total_r / len(trades) if trades else 0
+    total_pips = sum(t["pips"] for t in trades)
+    avg_pips = total_pips / len(trades) if trades else 0
     win_rate = (len(wins) / len(decided) * 100) if decided else 0
-    gross_win = sum(t["r"] for t in wins)
-    gross_loss = abs(sum(t["r"] for t in losses))
+    gross_win = sum(t["pips"] for t in wins)
+    gross_loss = abs(sum(t["pips"] for t in losses))
     profit_factor = (gross_win / gross_loss) if gross_loss > 0 else float("inf")
 
     equity = 0
     peak = 0
     max_dd = 0
     for t in trades:
-        equity += t["r"]
+        equity += t["pips"]
         peak = max(peak, equity)
         max_dd = min(max_dd, equity - peak)
 
     lines = [
-        f"Backtest: {SYMBOL} SCALP config",
+        f"Backtest: {SYMBOL} SCALP config (soft bias gate: {not BIAS_HARD_GATE})",
         f"Timeframes: bias={TF_TREND} structure={TF_STRUCTURE} entry={TF_ENTRY}",
+        f"Target {TP_ATR_MULT}x ATR (clamped {TP_MIN_PIPS}-{TP_MAX_PIPS} pips) / SL {SL_ATR_MULT}x ATR (clamped {SL_MIN_PIPS}-{SL_MAX_PIPS} pips), 1 pip = ${PIP_SIZE}",
         f"Total signals: {len(trades)}  (decided: {len(decided)}, timed out: {len(timeouts)})",
         f"Win rate (decided only): {win_rate:.1f}%",
-        f"Avg R per trade (all signals): {avg_r:.2f}",
-        f"Total R: {total_r:.2f}",
+        f"Avg pips per trade (all signals): {avg_pips:.1f}",
+        f"Total pips: {total_pips:.1f}",
         f"Profit factor: {profit_factor:.2f}",
-        f"Max drawdown: {max_dd:.2f}R",
-        f"(Single-target model @ {TARGET_R}R — real multi-TP scale-out not simulated)",
+        f"Max drawdown: {max_dd:.1f} pips",
+        f"(Single-target model, volatility-scaled per trade — full TP ladder not simulated)",
     ]
     return "\n".join(lines)
 
