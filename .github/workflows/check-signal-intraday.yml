@@ -28,7 +28,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STRATEGY_LABEL: "INTRADAY"
           STATE_FILENAME: "state_intraday.json"
-          FX_PAIRS: "BTC/USD"
+          FX_PAIRS: "XAU/USD"
           TF_TREND: "4h"
           TF_STRUCTURE: "15min"
           TF_ENTRY: "5min"
