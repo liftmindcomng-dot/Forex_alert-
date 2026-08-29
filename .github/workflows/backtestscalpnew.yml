@@ -1,0 +1,37 @@
+name: Backtest (Scalp)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run backtest
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FX_PAIRS: "XAU/USD"
+          TF_TREND: "4h"
+          TF_STRUCTURE: "15min"
+          TF_ENTRY: "5min"
+          SWING_LOOKBACK: "2"
+          SL_BUFFER_ATR_MULT: "0.08"
+          ENTRY_MODE: "retest_or_pullback"
+          RETEST_TOLERANCE_ATR_MULT: "0.15"
+          SWING_ENTRY_MODE: "false"
+          ENTRY_EXPIRY_BARS: "3"
+          TP_MULTIPLES: "0.5,1,1.5,2"
+          MAX_HOLD_BARS: "40"
+          BACKTEST_OUTPUTSIZE: "5000"
+        run: python backtest.py
