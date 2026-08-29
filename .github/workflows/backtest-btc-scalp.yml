@@ -1,0 +1,50 @@
+name: Backtest (BTC Scalp)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run BTC backtest
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FX_PAIRS: "BTC/USD"
+          TF_TREND: "4h"
+          TF_STRUCTURE: "15min"
+          TF_ENTRY: "5min"
+          SWING_LOOKBACK: "2"
+          ENTRY_MODE: "retest_or_pullback"
+          RETEST_TOLERANCE_ATR_MULT: "0.25"
+          SWING_ENTRY_MODE: "false"
+          ENTRY_EXPIRY_BARS: "5"
+          BIAS_HARD_GATE: "false"
+          # PIP_SIZE=1 means "1 unit = $1" — there's no pip convention for
+          # crypto, so this just repurposes the same pip-distance math to
+          # work in plain dollars.
+          PIP_SIZE: "1"
+          TP_ATR_MULT: "1.2"
+          TP_MIN_PIPS: "50"
+          TP_MAX_PIPS: "500"
+          SL_ATR_MULT: "0.5"
+          SL_MIN_PIPS: "50"
+          SL_MAX_PIPS: "250"
+          SPREAD_PIPS: "10"
+          MAX_HOLD_BARS: "40"
+          BACKTEST_OUTPUTSIZE: "5000"
+          HISTORY_ENTRY_BARS: "40000"
+          HISTORY_STRUCTURE_BARS: "20000"
+          API_CALL_DELAY_SECONDS: "8"
+        run: python backtestscalpnew.py
