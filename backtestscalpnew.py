@@ -50,8 +50,8 @@ TP_MIN_PIPS = float(os.environ.get("TP_MIN_PIPS", "10"))
 TP_MAX_PIPS = float(os.environ.get("TP_MAX_PIPS", "30"))
 
 SL_ATR_MULT = float(os.environ.get("SL_ATR_MULT", "0.5"))
-SL_MIN_PIPS = float(os.environ.get("SL_MIN_PIPS", "6"))
-SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "15"))
+SL_MIN_PIPS = float(os.environ.get("SL_MIN_PIPS", "15"))
+SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "25"))
 
 # Bias is now a SOFT filter: a setup is only blocked if bias actively
 # opposes it. Set BIAS_HARD_GATE=true to restore the old strict behavior
