@@ -19,8 +19,9 @@ Telegram and prints full detail (including funnel diagnostics) to the log.
 """
 
 import os
+import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 TWELVE_DATA_API_KEY = os.environ["TWELVE_DATA_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -63,15 +64,37 @@ BIAS_EMA_SLOW = int(os.environ.get("BIAS_EMA_SLOW", "50"))
 BIAS_SWING_LOOKBACK = int(os.environ.get("BIAS_SWING_LOOKBACK", "20"))
 
 MAX_HOLD_BARS = int(os.environ.get("MAX_HOLD_BARS", "40"))  # entry-TF bars before a trade times out
-OUTPUTSIZE = int(os.environ.get("BACKTEST_OUTPUTSIZE", "5000"))  # free-tier max per request
+
+# Twelve Data free tier caps a single call at 5000 bars. To get a real
+# sample size we page backward through history using end_date, one call
+# per chunk, with a delay between calls to stay under the 8/min free
+# rate limit. TREND_BARS stays a single call since 5000x4h already spans
+# 2+ years — plenty for EMA/bias context.
+PAGE_SIZE = 5000
+HISTORY_ENTRY_BARS = int(os.environ.get("HISTORY_ENTRY_BARS", "20000"))       # ~2-3 months of 5min
+HISTORY_STRUCTURE_BARS = int(os.environ.get("HISTORY_STRUCTURE_BARS", "10000"))  # ~2-3 months of 15min
+HISTORY_TREND_BARS = int(os.environ.get("BACKTEST_OUTPUTSIZE", "5000"))
+API_CALL_DELAY_SECONDS = float(os.environ.get("API_CALL_DELAY_SECONDS", "8"))
 
 TWELVE_DATA_URL = "https://api.twelvedata.com/time_series"
 
 
+def interval_minutes(interval):
+    if interval.endswith("min"):
+        return int(interval.replace("min", ""))
+    if interval.endswith("h"):
+        return int(interval.replace("h", "")) * 60
+    if interval.endswith("day"):
+        return int(interval.replace("day", "")) * 60 * 24
+    raise ValueError(f"Unrecognized interval: {interval}")
+
+
 # ==================== DATA ====================
-def fetch_candles(symbol, interval, outputsize):
+def fetch_candles(symbol, interval, outputsize, end_date=None):
     params = {"symbol": symbol, "interval": interval, "outputsize": outputsize,
               "apikey": TWELVE_DATA_API_KEY, "order": "ASC"}
+    if end_date:
+        params["end_date"] = end_date
     resp = requests.get(TWELVE_DATA_URL, params=params, timeout=30)
     data = resp.json()
     if "values" not in data:
@@ -84,6 +107,40 @@ def fetch_candles(symbol, interval, outputsize):
             "low": float(v["low"]), "close": float(v["close"]),
         })
     return candles
+
+
+def fetch_candles_paginated(symbol, interval, target_bars):
+    """Pages backward through history via end_date until target_bars is
+    reached or the API stops returning new/earlier data."""
+    all_candles = []
+    end_date = None
+    step = timedelta(minutes=interval_minutes(interval))
+
+    while len(all_candles) < target_bars:
+        batch = fetch_candles(symbol, interval, PAGE_SIZE, end_date=end_date)
+        if not batch:
+            break
+
+        if all_candles:
+            # drop any overlap with what we already have
+            cutoff = all_candles[0]["time"]
+            batch = [c for c in batch if c["time"] < cutoff]
+            if not batch:
+                break  # no progress — stop to avoid an infinite loop
+
+        all_candles = batch + all_candles
+        earliest = batch[0]["time"]
+        end_date = (earliest - step).strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"  [{interval}] fetched {len(batch)} bars, now have {len(all_candles)}/{target_bars} "
+              f"(earliest: {earliest})")
+
+        if len(batch) < PAGE_SIZE:
+            break  # hit the start of available history
+
+        time.sleep(API_CALL_DELAY_SECONDS)
+
+    return all_candles
 
 
 # ==================== INDICATORS (same logic as forex_alert.py) ====================
@@ -247,12 +304,16 @@ def run_backtest(trend_candles, structure_candles, entry_candles):
                 entry_price = last["close"]
                 sl_buffer = clamp_pips(atr_val, SL_ATR_MULT, SL_MIN_PIPS, SL_MAX_PIPS)
                 tp_dist = clamp_pips(atr_val, TP_ATR_MULT, TP_MIN_PIPS, TP_MAX_PIPS)
+                # SL is measured from the actual entry price, not ref_level —
+                # placing it off ref_level let real risk exceed the clamp
+                # whenever price had already drifted from that level before
+                # the retest confirmed.
                 if trade_dir == "buy":
-                    sl = ref_level - sl_buffer
+                    sl = entry_price - sl_buffer
                     tp = entry_price + tp_dist
                     risk = entry_price - sl
                 else:
-                    sl = ref_level + sl_buffer
+                    sl = entry_price + sl_buffer
                     tp = entry_price - tp_dist
                     risk = sl - entry_price
 
@@ -350,9 +411,11 @@ def send_telegram_message(text):
 
 def main():
     print(f"Fetching history for {SYMBOL}...")
-    trend_candles = fetch_candles(SYMBOL, TF_TREND, OUTPUTSIZE)
-    structure_candles = fetch_candles(SYMBOL, TF_STRUCTURE, OUTPUTSIZE)
-    entry_candles = fetch_candles(SYMBOL, TF_ENTRY, OUTPUTSIZE)
+    trend_candles = fetch_candles(SYMBOL, TF_TREND, HISTORY_TREND_BARS)
+    print(f"[{TF_TREND}] fetched {len(trend_candles)} bars")
+
+    structure_candles = fetch_candles_paginated(SYMBOL, TF_STRUCTURE, HISTORY_STRUCTURE_BARS)
+    entry_candles = fetch_candles_paginated(SYMBOL, TF_ENTRY, HISTORY_ENTRY_BARS)
 
     print(f"Bars fetched — trend:{len(trend_candles)} structure:{len(structure_candles)} entry:{len(entry_candles)}")
     print(f"Entry TF date range: {entry_candles[0]['time']} to {entry_candles[-1]['time']}")
