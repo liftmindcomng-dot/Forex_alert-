@@ -63,6 +63,11 @@ BIAS_EMA_FAST = int(os.environ.get("BIAS_EMA_FAST", "20"))
 BIAS_EMA_SLOW = int(os.environ.get("BIAS_EMA_SLOW", "50"))
 BIAS_SWING_LOOKBACK = int(os.environ.get("BIAS_SWING_LOOKBACK", "20"))
 
+# Round-trip cost in pips deducted from every trade's result (spread paid
+# entering + exiting). XAUUSD spreads vary a lot by broker/session —
+# check your actual broker's typical spread and set this to match.
+SPREAD_PIPS = float(os.environ.get("SPREAD_PIPS", "3.0"))
+
 MAX_HOLD_BARS = int(os.environ.get("MAX_HOLD_BARS", "40"))  # entry-TF bars before a trade times out
 
 # Twelve Data free tier caps a single call at 5000 bars. To get a real
@@ -320,7 +325,9 @@ def run_backtest(trend_candles, structure_candles, entry_candles):
                 if risk > 0:
                     target_pips = tp_dist / PIP_SIZE
                     result_pips, outcome = simulate_trade(entry_candles, ei, trade_dir, sl, tp, entry_price, target_pips)
-                    trades.append({"time": str(now), "direction": trade_dir, "pips": result_pips, "outcome": outcome})
+                    net_pips = result_pips - SPREAD_PIPS
+                    trades.append({"time": str(now), "direction": trade_dir, "pips": net_pips,
+                                   "gross_pips": result_pips, "outcome": outcome})
                     counts["signals_fired"] += 1
                 sweep = None  # consume it either way
 
@@ -365,12 +372,13 @@ def summarize(trades):
     if not trades:
         return "No signals fired over the backtest window."
 
-    decided = [t for t in trades if t["outcome"] in ("tp", "sl")]
+    decided = [t for t in trades if t["outcome"] in ("tp", "sl", "sl_and_tp_same_bar_conservative_loss")]
     wins = [t for t in decided if t["pips"] > 0]
     losses = [t for t in decided if t["pips"] <= 0]
     timeouts = [t for t in trades if t["outcome"] == "timeout"]
 
     total_pips = sum(t["pips"] for t in trades)
+    total_gross_pips = sum(t["gross_pips"] for t in trades)
     avg_pips = total_pips / len(trades) if trades else 0
     win_rate = (len(wins) / len(decided) * 100) if decided else 0
     gross_win = sum(t["pips"] for t in wins)
@@ -385,16 +393,28 @@ def summarize(trades):
         peak = max(peak, equity)
         max_dd = min(max_dd, equity - peak)
 
+    def side_stats(direction):
+        side = [t for t in decided if t["direction"] == direction]
+        side_wins = [t for t in side if t["pips"] > 0]
+        wr = (len(side_wins) / len(side) * 100) if side else 0
+        return len(side), wr
+
+    buy_n, buy_wr = side_stats("buy")
+    sell_n, sell_wr = side_stats("sell")
+
     lines = [
         f"Backtest: {SYMBOL} SCALP config (soft bias gate: {not BIAS_HARD_GATE})",
         f"Timeframes: bias={TF_TREND} structure={TF_STRUCTURE} entry={TF_ENTRY}",
         f"Target {TP_ATR_MULT}x ATR (clamped {TP_MIN_PIPS}-{TP_MAX_PIPS} pips) / SL {SL_ATR_MULT}x ATR (clamped {SL_MIN_PIPS}-{SL_MAX_PIPS} pips), 1 pip = ${PIP_SIZE}",
+        f"Spread cost: {SPREAD_PIPS} pips/trade deducted",
         f"Total signals: {len(trades)}  (decided: {len(decided)}, timed out: {len(timeouts)})",
-        f"Win rate (decided only): {win_rate:.1f}%",
-        f"Avg pips per trade (all signals): {avg_pips:.1f}",
-        f"Total pips: {total_pips:.1f}",
-        f"Profit factor: {profit_factor:.2f}",
-        f"Max drawdown: {max_dd:.1f} pips",
+        f"Win rate (decided, net of spread): {win_rate:.1f}%",
+        f"  Buy: {buy_n} trades, {buy_wr:.1f}% win rate",
+        f"  Sell: {sell_n} trades, {sell_wr:.1f}% win rate",
+        f"Avg pips/trade (net): {avg_pips:.1f}",
+        f"Total pips — gross: {total_gross_pips:.1f} | net of spread: {total_pips:.1f}",
+        f"Profit factor (net): {profit_factor:.2f}",
+        f"Max drawdown (net): {max_dd:.1f} pips",
         f"(Single-target model, volatility-scaled per trade — full TP ladder not simulated)",
     ]
     return "\n".join(lines)
