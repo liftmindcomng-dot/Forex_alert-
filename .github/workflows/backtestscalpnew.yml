@@ -14,7 +14,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests pandas
 
       - name: Run backtest
         env:
@@ -34,4 +34,4 @@ jobs:
           TP_MULTIPLES: "0.5,1,1.5,2"
           MAX_HOLD_BARS: "40"
           BACKTEST_OUTPUTSIZE: "5000"
-        run: python backtest.py
+        run: python backtestscalpnew.py
