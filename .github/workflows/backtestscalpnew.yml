@@ -41,7 +41,7 @@ jobs:
           BIAS_HARD_GATE: "false"
           MAX_HOLD_BARS: "40"
           BACKTEST_OUTPUTSIZE: "5000"
-          HISTORY_ENTRY_BARS: "40000"
-          HISTORY_STRUCTURE_BARS: "20000"
+          HISTORY_ENTRY_BARS: "80000"
+          HISTORY_STRUCTURE_BARS: "40000"
           API_CALL_DELAY_SECONDS: "8"
         run: python backtestscalpnew.py
