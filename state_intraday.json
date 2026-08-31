@@ -15,15 +15,10 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": "bullish",
-      "fetched_at": "2026-08-31T05:45:22.417422+00:00"
+      "bias": null,
+      "fetched_at": "2026-08-31T09:40:22.756782+00:00"
     },
-    "setup": {
-      "bos_level": 4448.09005,
-      "pullback_zone": 4430.07132,
-      "confirmed": true,
-      "last_entry_bar_time": "2026-08-31 08:00:00"
-    },
+    "setup": null,
     "bias": "bullish",
     "structure_cache": {
       "bos": null,
