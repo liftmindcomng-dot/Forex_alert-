@@ -1,0 +1,70 @@
+name: SNIPER V7 Backtest
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backtest_sniper_v7.py'
+      - 'data/**'
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pandas numpy
+
+      - name: Run backtest
+        run: |
+          python backtest_sniper_v7.py \
+            --data data/xauusd_m5.csv \
+            --start 2024-01-01 \
+            --end 2026-07-31 \
+            --out report.txt \
+            --trades-csv trades.csv
+
+      - name: Upload results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: |
+            report.txt
+            trades.csv
+
+      - name: Send summary message to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          SUMMARY=$(head -c 3500 report.txt)
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=SNIPER V7 backtest finished:
+${SUMMARY}"
+
+      - name: Send report.txt to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+            -F chat_id="${CHAT_ID}" \
+            -F document=@report.txt
+
+      - name: Send trades.csv to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+            -F chat_id="${CHAT_ID}" \
+            -F document=@trades.csv
