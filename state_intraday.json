@@ -25,14 +25,10 @@
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": [
-        4456.12941,
-        4426.34561,
-        139
-      ],
+      "bos": null,
       "ob": null,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-01T00:35:23.119911+00:00"
+      "fetched_at": "2026-09-01T00:50:41.570974+00:00"
     }
   }
 }
