@@ -18,13 +18,22 @@
       "bias": "bearish",
       "fetched_at": "2026-09-02T19:45:23.006243+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4384.23429,
+      "pullback_zone": 4391.55066,
+      "confirmed": true,
+      "last_entry_bar_time": "2026-09-02 23:20:00"
+    },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4384.23429,
+        4391.55066,
+        137
+      ],
       "ob": null,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-02T23:10:23.748597+00:00"
+      "fetched_at": "2026-09-02T23:25:23.925294+00:00"
     }
   }
 }
