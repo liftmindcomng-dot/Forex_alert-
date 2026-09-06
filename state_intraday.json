@@ -21,14 +21,19 @@
     "setup": {
       "bos_level": 4429.14047,
       "pullback_zone": 4428.86626,
-      "confirmed": false
+      "confirmed": true,
+      "last_entry_bar_time": "2026-09-06 22:25:00"
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4429.14047,
+        4428.86626,
+        143
+      ],
       "ob": null,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-06T22:15:24.360738+00:00"
+      "fetched_at": "2026-09-06T22:30:27.164078+00:00"
     }
   }
 }
