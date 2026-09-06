@@ -18,13 +18,28 @@
       "bias": "bullish",
       "fetched_at": "2026-09-06T22:00:28.500678+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4430.07132,
+      "pullback_zone": 4428.87685,
+      "confirmed": false,
+      "ob": {
+        "high": 4429.14995,
+        "low": 4428.88461
+      }
+    },
     "bias": "bullish",
     "structure_cache": {
-      "bos": null,
-      "ob": null,
+      "bos": [
+        4430.07132,
+        4428.87685,
+        146
+      ],
+      "ob": {
+        "high": 4429.14995,
+        "low": 4428.88461
+      },
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-06T22:00:28.500678+00:00"
+      "fetched_at": "2026-09-06T22:55:27.074872+00:00"
     }
   }
 }
