@@ -310,5 +310,8 @@ def run_backtest():
         json.dump(summary, f, indent=2)
 
     if closed_trades:
+            if closed_trades:
         with open(TRADES_CSV, "w", newline="") as f:
-
+            writer = csv.DictWriter(f, fieldnames=list(closed_trades[0].keys()))
+            writer.writeheader()
+            writer.writerows(closed_trades)
