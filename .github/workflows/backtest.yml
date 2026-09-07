@@ -1,0 +1,66 @@
+name: Run SMC Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: "Pair to backtest (e.g. XAU/USD)"
+        required: false
+        default: "XAU/USD"
+      start_date:
+        description: "Backtest start date (YYYY-MM-DD)"
+        required: false
+        default: "2024-01-01"
+      end_date:
+        description: "Backtest end date (YYYY-MM-DD)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run backtest
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: "dummy"
+          TELEGRAM_CHAT_ID: "dummy"
+          BACKTEST_PAIR: ${{ github.event.inputs.pair }}
+          BACKTEST_START: ${{ github.event.inputs.start_date }}
+          BACKTEST_END: ${{ github.event.inputs.end_date }}
+          TF_TREND: "4h"
+          TF_STRUCTURE: "1h"
+          TF_ENTRY: "15min"
+          SWING_LOOKBACK: "2"
+          SL_BUFFER_ATR_MULT: "0.15"
+          OB_MAX_ZONES: "5"
+          LIQUIDITY_LOOKBACK: "10"
+          DISPLACEMENT_ATR_MULT: "1.3"
+          SMC_REJECTION_WICK_RATIO: "2.0"
+          SR_MIN_TOUCHES: "3"
+          TP_MULTIPLES: "1,2,3,4,5"
+          SESSION_START_UTC: "7"
+          SESSION_END_UTC: "21"
+          API_CALL_SLEEP_SECONDS: "8"
+        run: python backtest.py
+
+      - name: Upload backtest results
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: |
+            backtest_trades.csv
+            backtest_summary.json
+          if-no-files-found: warn
