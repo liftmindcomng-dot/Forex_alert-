@@ -2,52 +2,57 @@
 """
 Backtest for the Swing STRUCTURE (SMC) mode of forex_alert.py
 
-Usage:
-    python backtest.py                          # default: XAU/USD 2024 → now
-    python backtest.py --pair XAU/USD --start 2024-01-01 --end 2026-09-01
-    python backtest.py --data path/to/1m.csv    # use local 1-minute CSV
+Uses the same Twelve Data API key as the live bot.
 
-Outputs:
-    - backtest_trades.csv
-    - backtest_equity.png
-    - summary printed to stdout (and written to backtest_summary.txt)
+Usage:
+    TWELVE_DATA_API_KEY=xxx python backtest.py
+    python backtest.py --start 2024-01-01 --end 2025-12-31
+    python backtest.py --data path/to/15m.csv   # optional local override
+
+Outputs (in backtest_results/):
+    backtest_trades.csv
+    backtest_equity.png
+    backtest_summary.txt
 """
 
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+import time
+import urllib.parse
+import urllib.request
+import json
 from pathlib import Path
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Parameters – mirror the Swing workflow (check-signal.yml / forex_alert.py)
+# Parameters – mirror the Swing workflow
 # ---------------------------------------------------------------------------
 SWING_LOOKBACK = 2
 SL_BUFFER_ATR_MULT = 0.15
 TP_MULTIPLES = (1, 2, 3, 4, 5)
 OB_LOOKBACK = 15
 OB_MAX_ZONES = 3
-REJECTION_WICK_RATIO = 0.6          # required for entry
+REJECTION_WICK_RATIO = 0.6
 LIQUIDITY_LOOKBACK = 20
 DISPLACEMENT_ATR_MULT = 1.0
 SR_MIN_TOUCHES = 2
 SR_TOUCH_TOLERANCE_ATR_MULT = 0.25
 SD_CONSOLIDATION_BARS = 3
 SD_MOVE_ATR_MULT = 1.5
-SESSION_START_UTC = 9               # skip early London
+SESSION_START_UTC = 9
 SESSION_END_UTC = 21
 ATR_PERIOD = 14
-
-# Extra filters (from optimisation)
 REQUIRE_REJECTION = True
-CHOCH_PREFERRED = True              # pure BOS needs extra confluence
+CHOCH_PREFERRED = True
+API_CALL_SLEEP = 8          # free-tier friendly
 
 
 # ---------------------------------------------------------------------------
-# Core helpers (ported from forex_alert.py)
+# Helpers (same logic as forex_alert.py)
 # ---------------------------------------------------------------------------
 
 def atr(highs, lows, closes, period=14):
@@ -267,61 +272,91 @@ def in_session(ts, start_hour=9, end_hour=21):
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Twelve Data fetch
 # ---------------------------------------------------------------------------
 
-def load_1m_data(path: str | None, start: str, end: str) -> pd.DataFrame:
-    """Load 1-minute OHLC. Expects columns: datetime, open, high, low, close[, volume]"""
-    if path and Path(path).exists():
-        print(f"Loading local data from {path}")
-        df = pd.read_csv(path)
-        # flexible column names
-        colmap = {c.lower(): c for c in df.columns}
-        for need in ("open", "high", "low", "close"):
-            if need not in colmap and need.title() in df.columns:
-                colmap[need] = need.title()
+def fetch_twelvedata(symbol: str, interval: str, start: str, end: str | None, api_key: str) -> pd.DataFrame:
+    """
+    Fetch OHLCV from Twelve Data.
+    Free tier: max 5000 bars per request, 8 calls/min.
+    We request the maximum and paginate if needed.
+    """
+    all_rows = []
+    # Twelve Data uses end_date / start_date
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "apikey": api_key,
+        "timezone": "UTC",
+        "outputsize": 5000,
+        "order": "ASC",
+    }
+    if start:
+        params["start_date"] = start
+    if end:
+        params["end_date"] = end
+
+    url = "https://api.twelvedata.com/time_series?" + urllib.parse.urlencode(params)
+    print(f"  Fetching {symbol} {interval} ...")
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        data = json.loads(resp.read().decode())
+
+    if "values" not in data:
+        msg = data.get("message") or data.get("status") or str(data)
+        raise RuntimeError(f"Twelve Data error [{symbol} {interval}]: {msg}")
+
+    rows = data["values"]
+    df = pd.DataFrame(rows)
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.set_index("datetime").sort_index()
+    for col in ("open", "high", "low", "close"):
+        df[col] = df[col].astype(float)
+    print(f"    → {len(df)} bars  ({df.index.min()} → {df.index.max()})")
+    time.sleep(API_CALL_SLEEP)
+    return df[["open", "high", "low", "close"]]
+
+
+def load_data(pair: str, start: str, end: str | None, data_path: str | None):
+    """Return (df15, df1h, df4h)"""
+    if data_path and Path(data_path).exists():
+        print(f"Loading local 15m data from {data_path}")
+        df = pd.read_csv(data_path)
         dt_col = next((c for c in df.columns if "time" in c.lower() or "date" in c.lower()), df.columns[0])
         df["datetime"] = pd.to_datetime(df[dt_col])
-        df = df.set_index("datetime")[["open", "high", "low", "close"]].astype(float)
-    else:
-        # Fallback: try to use previously downloaded Histdata-style files if present
-        data_dir = Path("data")
-        files = sorted(data_dir.glob("DAT_ASCII_XAUUSD_M1_*.csv")) if data_dir.exists() else []
-        if not files:
-            print(
-                "ERROR: No data provided.\n"
-                "Pass --data path/to/1m.csv  or place Histdata CSVs in ./data/\n"
-                "Expected format: datetime,open,high,low,close"
-            )
-            sys.exit(1)
-        print(f"Loading {len(files)} Histdata files from ./data/")
-        dfs = []
-        for f in files:
-            tmp = pd.read_csv(f, sep=";", header=None, names=["datetime", "open", "high", "low", "close", "volume"])
-            tmp["datetime"] = pd.to_datetime(tmp["datetime"], format="%Y%m%d %H%M%S")
-            dfs.append(tmp)
-        df = pd.concat(dfs, ignore_index=True).drop_duplicates("datetime").set_index("datetime")
-        df = df[["open", "high", "low", "close"]].astype(float)
+        df = df.set_index("datetime")[["open", "high", "low", "close"]].astype(float).sort_index()
+        if start:
+            df = df[df.index >= pd.Timestamp(start)]
+        if end:
+            df = df[df.index <= pd.Timestamp(end)]
+        # resample higher TFs
+        ohlc = {"open": "first", "high": "max", "low": "min", "close": "last"}
+        df15 = df
+        df1h = df.resample("1h").agg(ohlc).dropna()
+        df4h = df.resample("4h").agg(ohlc).dropna()
+        return df15, df1h, df4h
 
-    df = df.sort_index()
-    if start:
-        df = df[df.index >= pd.Timestamp(start)]
-    if end:
-        df = df[df.index <= pd.Timestamp(end)]
-    print(f"1m bars: {len(df):,}   {df.index.min()} → {df.index.max()}")
-    return df
+    api_key = os.environ.get("TWELVE_DATA_API_KEY")
+    if not api_key:
+        print(
+            "ERROR: No data and no TWELVE_DATA_API_KEY.\n"
+            "Either set the env var (same secret as forex_alert.py) or pass --data path/to/csv"
+        )
+        sys.exit(1)
+
+    print(f"Fetching {pair} from Twelve Data (start={start}, end={end or 'latest'})")
+    # Note: free tier history depth is limited. 15min usually gives ~few months.
+    # For longer history the paid plan or local CSV is required.
+    df15 = fetch_twelvedata(pair, "15min", start, end, api_key)
+    df1h = fetch_twelvedata(pair, "1h", start, end, api_key)
+    df4h = fetch_twelvedata(pair, "4h", start, end, api_key)
+    return df15, df1h, df4h
 
 
 # ---------------------------------------------------------------------------
-# Backtest engine
+# Backtest engine (works directly on 15m / 1H / 4H)
 # ---------------------------------------------------------------------------
 
-def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
-    print("Resampling to 15min / 1H / 4H ...")
-    ohlc = {"open": "first", "high": "max", "low": "min", "close": "last"}
-    df15 = df1m.resample("15min").agg(ohlc).dropna()
-    df1h = df1m.resample("1h").agg(ohlc).dropna()
-    df4h = df1m.resample("4h").agg(ohlc).dropna()
+def run_backtest(df15: pd.DataFrame, df1h: pd.DataFrame, df4h: pd.DataFrame) -> pd.DataFrame:
     print(f"15m: {len(df15):,}   1H: {len(df1h):,}   4H: {len(df4h):,}")
 
     atr1h = atr(df1h["high"].values, df1h["low"].values, df1h["close"].values, ATR_PERIOD)
@@ -344,11 +379,11 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
         return df_htf.loc[df_htf.index <= up_to].tail(lookback)
 
     print("Running simulation ...")
-    for i in range(100, n15):
+    for i in range(80, n15):
         ts = times15[i]
         price = closes15[i]
 
-        # ----- manage open trade (partial TPs) -----
+        # manage open trade (partial TPs)
         if open_trade is not None:
             t = open_trade
             remaining = t["remaining"]
@@ -408,7 +443,7 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
             else:
                 open_trade = t
 
-        # ----- 4H bias -----
+        # 4H bias
         h4 = htf_slice(df4h, ts, 120)
         if len(h4) < 30:
             continue
@@ -421,21 +456,21 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
             active_zones = [z for z in active_zones if z["direction"] == bias and z.get("active", True)]
         last_bias = bias
 
-        # ----- 1H structure -----
+        # 1H structure
         h1 = htf_slice(df1h, ts, 150)
         if len(h1) < 40:
             continue
         try:
             loc = df1h.index.get_loc(h1.index[-1])
-            atr_s = atr1h[loc]
+            atr_s = atr1h[loc] if not isinstance(loc, slice) else atr1h[loc.stop - 1]
         except Exception:
             continue
-        if atr_s is None or np.isnan(atr_s):
+        if atr_s is None or (isinstance(atr_s, float) and np.isnan(atr_s)):
             continue
 
         bos = check_structure_break(
             h1["high"].values, h1["low"].values, h1["close"].values,
-            bias, atr_s, DISPLACEMENT_ATR_MULT,
+            bias, float(atr_s), DISPLACEMENT_ATR_MULT,
         )
 
         if bos:
@@ -448,13 +483,13 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
                 )
                 sd = find_supply_demand_zone(
                     h1["open"].values, h1["high"].values, h1["low"].values, h1["close"].values,
-                    bias, bos_index, atr_s, SD_CONSOLIDATION_BARS, SD_MOVE_ATR_MULT,
+                    bias, bos_index, float(atr_s), SD_CONSOLIDATION_BARS, SD_MOVE_ATR_MULT,
                 )
                 if sd:
                     zones.append(sd)
 
                 swings = find_swings(h1["high"].values, h1["low"].values, SWING_LOOKBACK)
-                tol = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s
+                tol = SR_TOUCH_TOLERANCE_ATR_MULT * float(atr_s)
                 pools = find_liquidity_pools(swings, tol)
                 liquidity_ok = True
                 if LIQUIDITY_LOOKBACK > 0:
@@ -474,12 +509,8 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
                 for z in zones:
                     active_zones.append(
                         {
-                            "high": z["high"],
-                            "low": z["low"],
-                            "type": z["type"],
-                            "direction": bias,
-                            "active": True,
-                            "is_choch": is_choch,
+                            "high": z["high"], "low": z["low"], "type": z["type"],
+                            "direction": bias, "active": True, "is_choch": is_choch,
                         }
                     )
                 for d in ("bullish", "bearish"):
@@ -513,7 +544,7 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
         if not in_session(ts, SESSION_START_UTC, SESSION_END_UTC):
             continue
 
-        # ----- 15m confirmation -----
+        # 15m confirmation
         active = [z for z in active_zones if z["direction"] == bias and z.get("active", True)]
         if not active:
             continue
@@ -544,7 +575,6 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
         if conf is None:
             continue
 
-        # CHoCH preferred
         is_choch = conf.get("is_choch", False) or setup.get("is_choch", False)
         if CHOCH_PREFERRED and not is_choch:
             extra = (
@@ -555,9 +585,8 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
             if not extra:
                 continue
 
-        # build trade
-        a15 = atr15[i] if i < len(atr15) and not np.isnan(atr15[i]) else atr_s
-        buffer = SL_BUFFER_ATR_MULT * a15
+        a15v = atr15[i] if i < len(atr15) and not np.isnan(atr15[i]) else float(atr_s)
+        buffer = SL_BUFFER_ATR_MULT * a15v
         entry = conf["entry"]
         if bias == "bullish":
             sl = conf["sl_anchor"] - buffer
@@ -577,7 +606,7 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
         score = 0
         if is_choch:
             score += 2
-        score += 2  # displacement already required
+        score += 2
         if conf["confirmations"].get("fvg"):
             score += 1
         if setup.get("liquidity_ok"):
@@ -614,7 +643,6 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
         }
         setup = None
 
-    # close leftover
     if open_trade is not None:
         t = open_trade
         exit_price = closes15[-1]
@@ -646,17 +674,17 @@ def run_backtest(df1m: pd.DataFrame) -> pd.DataFrame:
 
 def print_and_save_summary(trades: pd.DataFrame, out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary_lines = []
+    lines = []
 
     def log(msg=""):
         print(msg)
-        summary_lines.append(msg)
+        lines.append(str(msg))
 
     log("=== BACKTEST SUMMARY ===")
     log(f"Total trades : {len(trades)}")
     if len(trades) == 0:
         log("No trades generated.")
-        (out_dir / "backtest_summary.txt").write_text("\n".join(summary_lines))
+        (out_dir / "backtest_summary.txt").write_text("\n".join(lines))
         return
 
     wins = trades[trades["r"] > 0]
@@ -668,14 +696,11 @@ def print_and_save_summary(trades: pd.DataFrame, out_dir: Path):
     log(f"Profit factor: {pf:.2f}")
     log(f"Total R      : {trades['r'].sum():.1f}")
     log(f"Max R / Min R: {trades['r'].max():.2f} / {trades['r'].min():.2f}")
-
     equity = trades["r"].cumsum()
     dd = equity - equity.cummax()
     log(f"Max Drawdown : {dd.min():.1f} R")
-
     log("\nBy conviction class:")
     log(str(trades.groupby("duration_class")["r"].agg(["count", "mean", "sum"])))
-
     log("\nTP hit distribution:")
     log(str(trades["tp_hit"].value_counts(dropna=False).sort_index()))
 
@@ -686,7 +711,6 @@ def print_and_save_summary(trades: pd.DataFrame, out_dir: Path):
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-
         fig, ax = plt.subplots(figsize=(12, 5))
         ax.plot(equity.values, label="Cumulative R")
         ax.fill_between(range(len(dd)), dd.values, 0, alpha=0.3, color="red", label="Drawdown")
@@ -701,7 +725,7 @@ def print_and_save_summary(trades: pd.DataFrame, out_dir: Path):
     except Exception as e:
         log(f"Plot failed: {e}")
 
-    (out_dir / "backtest_summary.txt").write_text("\n".join(summary_lines))
+    (out_dir / "backtest_summary.txt").write_text("\n".join(lines))
     log(f"Summary     → {out_dir / 'backtest_summary.txt'}")
 
 
@@ -710,16 +734,16 @@ def print_and_save_summary(trades: pd.DataFrame, out_dir: Path):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Backtest Swing STRUCTURE (SMC) strategy")
-    parser.add_argument("--pair", default="XAU/USD", help="Symbol (for reporting only)")
-    parser.add_argument("--start", default="2024-01-01", help="Start date YYYY-MM-DD")
-    parser.add_argument("--end", default=None, help="End date YYYY-MM-DD (default: latest data)")
-    parser.add_argument("--data", default=None, help="Path to 1-minute OHLC CSV")
-    parser.add_argument("--out", default="backtest_results", help="Output directory")
+    parser = argparse.ArgumentParser(description="Backtest Swing STRUCTURE (SMC)")
+    parser.add_argument("--pair", default="XAU/USD")
+    parser.add_argument("--start", default="2024-01-01")
+    parser.add_argument("--end", default=None)
+    parser.add_argument("--data", default=None, help="Optional local 15m CSV")
+    parser.add_argument("--out", default="backtest_results")
     args = parser.parse_args()
 
-    df1m = load_1m_data(args.data, args.start, args.end)
-    trades = run_backtest(df1m)
+    df15, df1h, df4h = load_data(args.pair, args.start, args.end, args.data)
+    trades = run_backtest(df15, df1h, df4h)
     print_and_save_summary(trades, Path(args.out))
 
 
