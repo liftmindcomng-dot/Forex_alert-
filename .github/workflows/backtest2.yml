@@ -1,0 +1,78 @@
+# .github/workflows/backtest.yml
+name: Backtest Swing SMC
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: "2024-01-01"
+      end_date:
+        description: "End date (YYYY-MM-DD) – leave empty for latest"
+        required: false
+        default: ""
+      pair:
+        description: "Pair"
+        required: false
+        default: "XAU/USD"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy matplotlib
+
+      - name: Run backtest
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          START_DATE: ${{ github.event.inputs.start_date || '2024-01-01' }}
+          END_DATE: ${{ github.event.inputs.end_date || '' }}
+          PAIR: ${{ github.event.inputs.pair || 'XAU/USD' }}
+        run: |
+          set -e
+          ARGS="--pair \"$PAIR\" --start \"$START_DATE\" --out backtest_results"
+          if [ -n "$END_DATE" ]; then
+            ARGS="$ARGS --end \"$END_DATE\""
+          fi
+          if [ -f data/xauusd_15m.csv ]; then
+            ARGS="$ARGS --data data/xauusd_15m.csv"
+          fi
+          echo "Running: python backtest.py $ARGS"
+          eval python backtest.py $ARGS
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-results
+          path: |
+            backtest_results/backtest_trades.csv
+            backtest_results/backtest_equity.png
+            backtest_results/backtest_summary.txt
+          retention-days: 30
+
+      - name: Print summary
+        if: always()
+        run: |
+          if [ -f backtest_results/backtest_summary.txt ]; then
+            cat backtest_results/backtest_summary.txt
+          else
+            echo "No summary file produced."
+          fi
