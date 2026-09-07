@@ -6,23 +6,22 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
 
   - 4H  : trend bias, from swing-high/swing-low structure
           (higher-high + higher-low = bullish, lower-high + lower-low = bearish)
-  - 15M/1H : structure break (BOS) in the direction of the 4H bias
+  - 15M/1H : structure break (BOS/CHoCH) in the direction of the 4H bias
   - 5M  : entry confirmation method, per ENTRY_MODE:
 
     STRUCTURE  (ENTRY_MODE=structure): SMC-style top-down ladder.
-    1H structure break, filtered by a displacement check (the breaking
-    candle must be an impulsive move, not a marginal poke past the
-    level) and by a liquidity sweep (price must have run a cluster of
-    equal highs/lows opposite the breakout direction shortly before the
-    break — the "stop hunt then reversal" pattern). Candidate zones are
-    then built from up to OB_MAX_ZONES order blocks (last opposite-
-    colored candle before the impulse) plus one supply/demand zone (a
-    tight consolidation immediately followed by a strong displacement
-    move), optionally filtered further by S/R confluence (the zone edge
-    must have been touched/respected SR_MIN_TOUCHES+ times historically).
-    Entry confirms on a 5M engulfing candle or rejection wick inside any
-    of those zones, restricted to the London/NY session window. SL
-    anchors to the zone edge.
+    1H structure break, filtered by a displacement check and a liquidity
+    sweep. Candidate zones (order blocks + supply/demand) persist across
+    runs in state.json with mitigation tracking — a zone stops being
+    tradeable once price closes fully through it, rather than being
+    rebuilt from scratch on every new break. Each break is tagged CHoCH
+    (reverses the prior bias) or BOS (continues it). Entry confirms on a
+    5M engulfing candle, rejection wick, or fresh fair value gap inside
+    any active zone, restricted to the London/NY session window. Each
+    confirmed signal gets a condition label (e.g. "OB+CHoCH+FVG+LIQ+SR")
+    and a conviction score that sets its hold-duration class (day /
+    day_swing / swing), which in turn selects which single hold-time
+    threshold applies to it.
 
     RETEST     (ENTRY_MODE=retest): breakout + retest — price must come
     back and touch the exact broken 15M level, then close back beyond
@@ -38,12 +37,15 @@ stop loss, and TP1-TP5 (1R through 5R by default, configurable via
 TP_MULTIPLES). There's still no automatic time-based exit — that would
 require tracking the trade's actual close, which this script doesn't do
 (it only ever sends alerts / optionally opens a demo order). What IS
-implemented is an optional hold-time *nudge*: once a signal has been
-open longer than DAY_MAX_HOLD_HOURS / DAY_SWING_MAX_HOLD_HOURS /
-SWING_MAX_HOLD_HOURS (any subset can be set — unset ones are skipped),
-a one-time Telegram reminder goes out per threshold so a forgotten
-trade doesn't run indefinitely unnoticed. This is a reminder based on
-wall-clock time since the alert, not a real position-aware time stop.
+implemented is an optional hold-time *nudge*: once a confirmed signal
+has been open longer than the single threshold matching its hold-
+duration class (DAY_MAX_HOLD_HOURS / DAY_SWING_MAX_HOLD_HOURS /
+SWING_MAX_HOLD_HOURS — any subset can be set; unset ones simply never
+fire for that class), one Telegram reminder goes out so a forgotten
+trade doesn't run indefinitely unnoticed. Non-structure modes (retest,
+pullback) don't compute a conviction score, so they default to the
+"day" threshold. This is a reminder based on wall-clock time since the
+alert, not a real position-aware time stop.
 
 Optionally places a demo MT5 order via MetaApi using SL + TP1 only
 (MT5 orders carry a single TP field — TP2/TP3 must be managed manually,
@@ -52,11 +54,12 @@ e.g. partial closes or manual trailing).
 Run on a schedule (recommended: every 5 minutes, matching the entry
 timeframe) via GitHub Actions — see check-signal.yml.
 
-State (per-pair bias, active structure break/zones, whether it's already
-been confirmed/alerted, hold-time nudge history, plus cached 4H/structure
-results) is kept in state.json so the same setup doesn't re-trigger a
-Telegram message on every run, and so slower timeframes aren't
-re-fetched every cycle.
+State (per-pair bias, active structure break/zones, persisted order
+blocks with mitigation status, whether it's already been confirmed/
+alerted, hold-time nudge history, plus cached 4H/structure results) is
+kept in state.json so the same setup doesn't re-trigger a Telegram
+message on every run, and so slower timeframes aren't re-fetched every
+cycle.
 
 API USAGE: with caching, only the 5M entry candle is fetched every run —
 4H is cached for TREND_CACHE_MINUTES, structure for
@@ -131,7 +134,8 @@ SESSION_START_UTC = int(os.environ.get("SESSION_START_UTC", "7"))
 SESSION_END_UTC = int(os.environ.get("SESSION_END_UTC", "21"))
 
 # For ENTRY_MODE=structure only — how many unmitigated order-block zones
-# (plus one supply/demand zone, if found) to keep as live candidates.
+# (plus one supply/demand zone, if found) to keep as live candidates,
+# per direction (persisted across runs — see sync_order_blocks).
 OB_MAX_ZONES = int(os.environ.get("OB_MAX_ZONES", "3"))
 
 # For ENTRY_MODE=structure only — liquidity pool / sweep detection.
@@ -169,7 +173,11 @@ STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "")
 STATE_FILENAME = os.environ.get("STATE_FILENAME", "state.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
 
-# ---- optional hold-time nudges (any subset can be set; unset = disabled) ----
+# ---- hold-time nudges (any subset can be set; unset class = disabled for
+# that class only). For ENTRY_MODE=structure, the class used is the
+# conviction-based duration_class computed at confirmation time (day /
+# day_swing / swing — see classify_conviction). Other modes default to
+# "day". ----
 
 def _parse_optional_hours(env_name):
     raw = os.environ.get(env_name, "").strip()
@@ -404,7 +412,7 @@ def check_retest_confirmation(highs, lows, closes, bias, bos_level, atr_val, loo
 # Used by ENTRY_MODE=structure. Mirrors the top-down ladder: 4H bias ->
 # 1H displacement break, confirmed by a prior liquidity sweep -> order
 # block / supply-demand zones, optionally filtered by S/R confluence ->
-# 5M engulfing/rejection confirmation inside a zone, during London/NY
+# 5M engulfing/rejection/FVG confirmation inside a zone, during London/NY
 # session hours.
 
 def find_order_blocks(opens, highs, lows, closes, bias, before_index, lookback=15, max_zones=3):
@@ -541,6 +549,20 @@ def has_rejection_wick(opens, highs, lows, closes, bias, i, zone_low, zone_high,
         return highs[i] >= zone_low and (wick / rng) >= wick_ratio and closes[i] < body_high
 
 
+def detect_fvg(opens, highs, lows, closes, i):
+    """3-candle fair value gap ending at candle i. Bull: candle i's low
+    sits above candle i-2's high (an un-retraced gap up), with the
+    middle candle bullish. Bear is the mirror image. Used as a third,
+    independent entry trigger alongside engulfing/rejection."""
+    if i < 2:
+        return None
+    if lows[i] > highs[i - 2] and closes[i - 1] > opens[i - 1]:
+        return "bull"
+    if highs[i] < lows[i - 2] and closes[i - 1] < opens[i - 1]:
+        return "bear"
+    return None
+
+
 def in_session(iso_time, start_hour, end_hour):
     """London/NY session filter (UTC hours). fetch_series requests
     timezone=UTC explicitly, so iso_time is guaranteed to be UTC here."""
@@ -555,27 +577,135 @@ def in_session(iso_time, start_hour, end_hour):
 
 def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end):
     """5M: price trading inside any candidate zone (order block or
-    supply/demand), with either an engulfing candle or a rejection wick
-    in the trend direction, during the configured session window. Zones
-    are checked nearest-to-the-break first; the first one that matches
-    wins."""
+    supply/demand), with an engulfing candle, a rejection wick, or a
+    fresh fair value gap in the trend direction, during the configured
+    session window. Zones are checked nearest-to-the-break first; the
+    first one that matches wins. Returns confirmation info plus the
+    individual trigger flags (used downstream for the condition label
+    and conviction score)."""
     n = len(closes)
     i = n - 1
     if not in_session(times[i], session_start, session_end):
         return None
+
+    trend_word = "bull" if bias == "bullish" else "bear"
+    fvg_hit = detect_fvg(opens, highs, lows, closes, i) == trend_word
 
     for zone in zones:
         zone_low, zone_high = zone["low"], zone["high"]
         price_in_zone = lows[i] <= zone_high and highs[i] >= zone_low
         if not price_in_zone:
             continue
-        if not (is_engulfing(opens, closes, bias, i) or
-                has_rejection_wick(opens, highs, lows, closes, bias, i, zone_low, zone_high)):
+        engulf = is_engulfing(opens, closes, bias, i)
+        rej = has_rejection_wick(opens, highs, lows, closes, bias, i, zone_low, zone_high,
+                                  wick_ratio=REJECTION_WICK_RATIO)
+        if not (engulf or rej or fvg_hit):
             continue
         entry = closes[i]
         sl_anchor = zone_low if bias == "bullish" else zone_high
-        return {"entry": entry, "sl_anchor": sl_anchor, "zone_type": zone.get("type", "order_block")}
+        return {
+            "entry": entry,
+            "sl_anchor": sl_anchor,
+            "zone_type": zone.get("type", "order_block"),
+            "confirmations": {"engulfing": engulf, "rejection": rej, "fvg": fvg_hit},
+        }
     return None
+
+
+# ---------------- persistent order-block tracking (ENTRY_MODE=structure) ----------------
+# Zones survive across runs in state.json (pair_state["order_blocks"]),
+# tagged with direction and whether they came from a CHoCH or a BOS
+# break, and are deactivated once price closes fully through them
+# (mitigated) rather than being rebuilt from scratch on every new break.
+
+def update_order_block_mitigation(order_blocks, current_price):
+    """Deactivate any persisted order block price has fully closed
+    through — it's been mitigated and is no longer a valid zone."""
+    for ob in order_blocks:
+        if not ob.get("active", True):
+            continue
+        if ob["direction"] == "bullish" and current_price < ob["bot"]:
+            ob["active"] = False
+        elif ob["direction"] == "bearish" and current_price > ob["top"]:
+            ob["active"] = False
+
+
+def prune_order_blocks(order_blocks, max_zones):
+    """Keep at most max_zones per direction, oldest dropped first."""
+    for direction in ("bullish", "bearish"):
+        same_dir = [ob for ob in order_blocks if ob["direction"] == direction]
+        while len(same_dir) > max_zones:
+            order_blocks.remove(same_dir.pop(0))
+
+
+def sync_order_blocks(pair_state, bias, new_zones, is_choch, max_zones):
+    """Persist freshly-found order block/supply-demand zones into
+    pair_state (tagged with direction + CHoCH/BOS), alongside any still-
+    active zones from earlier breaks, then prune per direction."""
+    obs = pair_state.setdefault("order_blocks", [])
+    for z in new_zones:
+        obs.append({
+            "top": z["high"], "bot": z["low"], "type": z.get("type", "order_block"),
+            "direction": bias, "active": True, "is_choch": is_choch,
+        })
+    prune_order_blocks(obs, max_zones)
+
+
+def active_zones_for(pair_state, bias):
+    return [
+        {"high": ob["top"], "low": ob["bot"], "type": ob["type"]}
+        for ob in reversed(pair_state.get("order_blocks", []))
+        if ob["direction"] == bias and ob.get("active", True)
+    ]
+
+
+def build_condition_label(is_choch, confirmations, sr_hit, sd_hit):
+    """Builds a label like 'OB+CHoCH+FVG+LIQ+SR' from everything that
+    actually fired for this signal, in a fixed, readable order."""
+    parts = ["OB", "CHoCH" if is_choch else "BOS"]
+    if confirmations.get("fvg"):
+        parts.append("FVG")
+    if confirmations.get("liquidity"):
+        parts.append("LIQ")
+    if confirmations.get("displacement"):
+        parts.append("DISP")
+    if confirmations.get("rejection"):
+        parts.append("REJ")
+    if sr_hit:
+        parts.append("SR")
+    if sd_hit:
+        parts.append("SD")
+    return "+".join(parts)
+
+
+def classify_conviction(is_choch, confirmations, sr_hit, sd_hit):
+    """Conviction score -> hold-duration class ("day" / "day_swing" /
+    "swing"), which selects the single hold-time threshold applied to
+    this signal (see check_hold_time_nudges). CHoCH and displacement
+    carry the most weight since they indicate a genuinely new
+    directional push, not just a pullback within an existing range."""
+    score = 0
+    if is_choch:
+        score += 2
+    if confirmations.get("displacement"):
+        score += 2
+    if confirmations.get("fvg"):
+        score += 1
+    if confirmations.get("liquidity"):
+        score += 1
+    if confirmations.get("rejection"):
+        score += 1
+    if sr_hit:
+        score += 1
+    if sd_hit:
+        score += 1
+
+    if score >= 5:
+        return "swing", "High conviction (CHoCH/displacement + multiple confluences) — manage by structure."
+    elif score >= 3:
+        return "day_swing", "Moderate conviction — consider partial at 1-2R, trail the rest."
+    else:
+        return "day", "Lower conviction, single-confirmation setup — treat as intraday."
 
 
 # ---------------- state ----------------
@@ -726,38 +856,39 @@ def is_forex_market_open():
 
 def check_hold_time_nudges(pair, setup):
     """If a confirmed signal has been open a while, nudge the user via
-    Telegram at escalating hold-duration thresholds so a forgotten trade
-    doesn't run indefinitely. Only thresholds with a value set
-    (DAY_MAX_HOLD_HOURS / DAY_SWING_MAX_HOLD_HOURS / SWING_MAX_HOLD_HOURS)
-    are used. Each threshold notifies once (tracked in `setup`, which is
-    part of state.json).
+    Telegram once it crosses the single hold-time threshold matching its
+    hold-duration class. For ENTRY_MODE=structure that class comes from
+    classify_conviction (day / day_swing / swing); other modes don't
+    compute a conviction score, so they default to "day". Only fires
+    once per setup (tracked via setup["notified"], part of state.json).
 
     NOTE: this only measures wall-clock time since the alert was sent —
     it has no visibility into whether the trade is actually still open
     (that lives on the broker/MT5 side, or in the user's own tracking),
     so treat it as a "go check on this" reminder, not a real exit."""
-    if not HOLD_TIME_NUDGES_ENABLED or "confirmed_at" not in setup:
+    if not HOLD_TIME_NUDGES_ENABLED or "confirmed_at" not in setup or setup.get("notified"):
         return
     try:
         confirmed_at = datetime.fromisoformat(setup["confirmed_at"])
     except (ValueError, TypeError):
         return
     elapsed_hours = (datetime.now(timezone.utc) - confirmed_at).total_seconds() / 3600
-    notified = set(setup.get("notified_thresholds", []))
 
-    thresholds = [
-        ("day", DAY_MAX_HOLD_HOURS, "Day-trade hold window exceeded — worth reviewing this position."),
-        ("day_swing", DAY_SWING_MAX_HOLD_HOURS, "Day-swing hold window exceeded — worth reviewing this position."),
-        ("swing", SWING_MAX_HOLD_HOURS, "Max swing hold window exceeded — well past the usual timeframe, please review manually."),
-    ]
-    label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
-    for key, threshold_hours, message in thresholds:
-        if threshold_hours is None or key in notified:
-            continue
-        if elapsed_hours >= threshold_hours:
-            send_telegram(f"⏰ {label}{pair} — {message}\nOpen for ~{elapsed_hours:.1f}h.")
-            notified.add(key)
-    setup["notified_thresholds"] = sorted(notified)
+    limits = {
+        "day": (DAY_MAX_HOLD_HOURS, "Day-trade hold window exceeded — worth reviewing this position."),
+        "day_swing": (DAY_SWING_MAX_HOLD_HOURS, "Day-swing hold window exceeded — worth reviewing this position."),
+        "swing": (SWING_MAX_HOLD_HOURS, "Max swing hold window exceeded — well past the usual timeframe, please review manually."),
+    }
+    duration_class = setup.get("duration_class", "day")
+    threshold_hours, message = limits.get(duration_class, limits["day"])
+    if threshold_hours is None:
+        return  # that class's threshold isn't set — no nudge for it
+
+    if elapsed_hours >= threshold_hours:
+        label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
+        cls_label = duration_class.replace("_", "/").upper()
+        send_telegram(f"⏰ {label}{pair} — [{cls_label}] {message}\nOpen for ~{elapsed_hours:.1f}h.")
+        setup["notified"] = True
 
 
 # ---------------- per-pair pipeline ----------------
@@ -794,7 +925,9 @@ def process_pair(pair, state):
         print(f"[{pair}] No clear 4H bias — skipping.")
         return
 
-    if pair_state.get("bias") != bias:
+    prior_bias = pair_state.get("bias")
+    bias_flipped = prior_bias is not None and prior_bias != bias
+    if bias_flipped:
         pair_state["setup"] = None  # bias flipped, drop any stale setup
     pair_state["bias"] = bias
 
@@ -847,6 +980,12 @@ def process_pair(pair, state):
                 else:
                     sr_ok = False
 
+            # Persist zones into the running order-block store (mitigation-
+            # tracked, tagged CHoCH/BOS) and update mitigation off the
+            # latest structure-timeframe close.
+            sync_order_blocks(pair_state, bias, zones, bias_flipped, OB_MAX_ZONES)
+            update_order_block_mitigation(pair_state.get("order_blocks", []), closes_s[-1])
+
         pair_state["structure_cache"] = {
             "bos": list(bos) if bos else None,
             "zones": zones,
@@ -870,6 +1009,7 @@ def process_pair(pair, state):
                 new_setup["zones"] = zones
                 new_setup["liquidity_ok"] = liquidity_ok
                 new_setup["sr_ok"] = sr_ok
+                new_setup["is_choch"] = bias_flipped
             pair_state["setup"] = new_setup
             print(f"[{pair}] {bias} {TF_STRUCTURE} structure break at {bos_level:.5f}. Watching {TF_ENTRY} for confirmation.")
 
@@ -904,8 +1044,16 @@ def process_pair(pair, state):
     if ENTRY_MODE == "retest":
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
     elif ENTRY_MODE == "structure":
-        confirmation = check_smc_confirmation(
-            times5, opens5, highs5, lows5, closes5, bias, setup["zones"], SESSION_START_UTC, SESSION_END_UTC)
+        # Re-check mitigation against the freshest (5M) close, then use
+        # whichever persisted zones for this bias are still active.
+        update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1])
+        active_zones = active_zones_for(pair_state, bias)
+        if not active_zones:
+            print(f"[{pair}] No active order-block/zone remaining for this bias — skipping.")
+            confirmation = None
+        else:
+            confirmation = check_smc_confirmation(
+                times5, opens5, highs5, lows5, closes5, bias, active_zones, SESSION_START_UTC, SESSION_END_UTC)
     elif ENTRY_MODE == "retest_or_pullback":
         # Whichever fires first counts — checked in this order each run.
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
@@ -923,6 +1071,22 @@ def process_pair(pair, state):
     if not confirmation:
         print(f"[{pair}] BOS active, no {TF_ENTRY} confirmation yet.")
         return
+
+    # --- structure mode only: condition label + conviction-based duration class ---
+    if ENTRY_MODE == "structure":
+        confs = confirmation.get("confirmations", {})
+        full_confirmations = {
+            "fvg": confs.get("fvg", False),
+            "liquidity": setup.get("liquidity_ok", False),
+            "displacement": True,  # structure break already required displacement to fire
+            "rejection": confs.get("rejection", False),
+        }
+        sr_hit = SR_MIN_TOUCHES > 0 and setup.get("sr_ok", False)
+        sd_hit = confirmation.get("zone_type") in ("demand_zone", "supply_zone")
+        is_choch = setup.get("is_choch", False)
+        confirmation["condition_label"] = build_condition_label(is_choch, full_confirmations, sr_hit, sd_hit)
+        confirmation["duration_class"], confirmation["duration_note"] = classify_conviction(
+            is_choch, full_confirmations, sr_hit, sd_hit)
 
     entry = confirmation["entry"]
     buffer = SL_BUFFER_ATR_MULT * a5
@@ -947,16 +1111,23 @@ def process_pair(pair, state):
     emoji = "🟢" if signal == "BUY" else "🔴"
     mode_desc = {
         "retest": "breakout + retest",
-        "structure": f"{confirmation.get('zone_type', 'order_block')} + engulfing/rejection (session-filtered)",
+        "structure": f"{confirmation.get('zone_type', 'order_block')} + engulfing/rejection/FVG (session-filtered)",
         "retest_or_pullback": f"retest+pullback mode ({confirmation.get('trigger')} fired)",
         "pullback": "deep pullback (50-79% retrace)" if SWING_ENTRY_MODE else "pullback",
     }.get(ENTRY_MODE, ENTRY_MODE)
+
+    setup_line = ""
+    if ENTRY_MODE == "structure":
+        cls = confirmation.get("duration_class", "day").replace("_", "/").upper()
+        setup_line = f"Setup: {confirmation.get('condition_label', '')} | Conviction: {cls} — {confirmation.get('duration_note', '')}\n"
+
     tp_lines = "\n".join(
         f"TP{idx} ({m:g}R): `{tp:.{decimals}f}`" for idx, (m, tp) in enumerate(zip(TP_MULTIPLES, tps), start=1)
     )
     msg = (
         f"{emoji} *{label}{signal} — {pair}*\n"
         f"Bias: 4H {bias} | Structure: {TF_STRUCTURE} BOS {setup['bos_level']:.{decimals}f} | Trigger: 5M {mode_desc}\n"
+        f"{setup_line}"
         f"Entry: `{entry:.{decimals}f}`\n"
         f"SL: `{sl:.{decimals}f}`  (R = {r:.{decimals}f})\n"
         f"{tp_lines}\n"
@@ -982,9 +1153,12 @@ def process_pair(pair, state):
 
     setup["confirmed"] = True
     setup["last_entry_bar_time"] = times5[-1]
+    if ENTRY_MODE == "structure":
+        setup["duration_class"] = confirmation.get("duration_class", "day")
+        setup["condition_label"] = confirmation.get("condition_label", "")
     if HOLD_TIME_NUDGES_ENABLED:
         setup["confirmed_at"] = datetime.now(timezone.utc).isoformat()
-        setup["notified_thresholds"] = []
+        setup["notified"] = False
     pair_state["setup"] = setup
     state[pair] = pair_state
 
