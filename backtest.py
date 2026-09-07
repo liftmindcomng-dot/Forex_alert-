@@ -310,4 +310,5 @@ def run_backtest():
         json.dump(summary, f, indent=2)
 
     if closed_trades:
-        with open(TRADES_CSV, "w",
+        with open(TRADES_CSV, "w", newline="") as f:
+
