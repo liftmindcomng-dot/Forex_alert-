@@ -6,15 +6,23 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
 
   - 4H  : trend bias, from swing-high/swing-low structure
           (higher-high + higher-low = bullish, lower-high + lower-low = bearish)
-  - 15M : structure break (BOS) in the direction of the 4H bias
+  - 15M/1H : structure break (BOS) in the direction of the 4H bias
   - 5M  : entry confirmation method, per ENTRY_MODE:
 
-    STRUCTURE  (ENTRY_MODE=structure): SMC-style. 1H structure break +
-    order block (last opposite-colored candle before the impulse), then
-    a 5M engulfing candle or rejection wick inside that order block,
-    restricted to the London/NY session window. SL anchors to the order
-    block edge. (Liquidity-pool/equal-highs detection is not
-    implemented — everything else in the "top-down ladder" playbook is.)
+    STRUCTURE  (ENTRY_MODE=structure): SMC-style top-down ladder.
+    1H structure break, filtered by a displacement check (the breaking
+    candle must be an impulsive move, not a marginal poke past the
+    level) and by a liquidity sweep (price must have run a cluster of
+    equal highs/lows opposite the breakout direction shortly before the
+    break — the "stop hunt then reversal" pattern). Candidate zones are
+    then built from up to OB_MAX_ZONES order blocks (last opposite-
+    colored candle before the impulse) plus one supply/demand zone (a
+    tight consolidation immediately followed by a strong displacement
+    move), optionally filtered further by S/R confluence (the zone edge
+    must have been touched/respected SR_MIN_TOUCHES+ times historically).
+    Entry confirms on a 5M engulfing candle or rejection wick inside any
+    of those zones, restricted to the London/NY session window. SL
+    anchors to the zone edge.
 
     RETEST     (ENTRY_MODE=retest): breakout + retest — price must come
     back and touch the exact broken 15M level, then close back beyond
@@ -27,7 +35,15 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
 
 Sends BUY/SELL alerts to Telegram with an entry price, a structure-based
 stop loss, and TP1-TP5 (1R through 5R by default, configurable via
-TP_MULTIPLES). No fixed time stop — this is meant to run intraday/swing style.
+TP_MULTIPLES). There's still no automatic time-based exit — that would
+require tracking the trade's actual close, which this script doesn't do
+(it only ever sends alerts / optionally opens a demo order). What IS
+implemented is an optional hold-time *nudge*: once a signal has been
+open longer than DAY_MAX_HOLD_HOURS / DAY_SWING_MAX_HOLD_HOURS /
+SWING_MAX_HOLD_HOURS (any subset can be set — unset ones are skipped),
+a one-time Telegram reminder goes out per threshold so a forgotten
+trade doesn't run indefinitely unnoticed. This is a reminder based on
+wall-clock time since the alert, not a real position-aware time stop.
 
 Optionally places a demo MT5 order via MetaApi using SL + TP1 only
 (MT5 orders carry a single TP field — TP2/TP3 must be managed manually,
@@ -36,10 +52,11 @@ e.g. partial closes or manual trailing).
 Run on a schedule (recommended: every 5 minutes, matching the entry
 timeframe) via GitHub Actions — see check-signal.yml.
 
-State (per-pair bias, active structure break, whether it's already been
-confirmed/alerted, plus cached 4H/structure results) is kept in
-state.json so the same setup doesn't re-trigger a Telegram message on
-every run, and so slower timeframes aren't re-fetched every cycle.
+State (per-pair bias, active structure break/zones, whether it's already
+been confirmed/alerted, hold-time nudge history, plus cached 4H/structure
+results) is kept in state.json so the same setup doesn't re-trigger a
+Telegram message on every run, and so slower timeframes aren't
+re-fetched every cycle.
 
 API USAGE: with caching, only the 5M entry candle is fetched every run —
 4H is cached for TREND_CACHE_MINUTES, structure for
@@ -81,13 +98,12 @@ SL_BUFFER_ATR_MULT = float(os.environ.get("SL_BUFFER_ATR_MULT", "0.15"))
 # TP1..TPn as R-multiples, e.g. "1,2,3,4,5" -> TP1=1R ... TP5=5R
 TP_MULTIPLES = tuple(float(x) for x in os.environ.get("TP_MULTIPLES", "1,2,3,4,5").split(",") if x.strip())
 
-# Entry confirmation method on the 5M chart, applied after a 15M BOS:
-#   "retest"   - breakout + retest: price must come back and touch the
-#                exact broken 15M level, then close back beyond it in the
-#                trend direction (rejection at the level). Used by Intraday.
-#   "pullback" - pure price-action pullback: a 5M swing pivot forms, then
-#                price breaks back through it in the trend direction.
-#                Used by Swing (with SWING_ENTRY_MODE for retracement depth).
+# Entry confirmation method on the 5M chart, applied after a 15M/1H BOS:
+#   "retest"    - breakout + retest. Used by Intraday (via retest_or_pullback).
+#   "pullback"  - pure price-action pullback. Used by Swing legacy / Intraday fallback.
+#   "structure" - SMC top-down ladder (order blocks, supply/demand,
+#                 liquidity sweep, S/R confluence, displacement filter).
+#                 Used by Swing.
 ENTRY_MODE = os.environ.get("ENTRY_MODE", "pullback").lower()
 RETEST_TOLERANCE_ATR_MULT = float(os.environ.get("RETEST_TOLERANCE_ATR_MULT", "0.3"))
 
@@ -114,6 +130,34 @@ REJECTION_WICK_RATIO = float(os.environ.get("REJECTION_WICK_RATIO", "0.5"))
 SESSION_START_UTC = int(os.environ.get("SESSION_START_UTC", "7"))
 SESSION_END_UTC = int(os.environ.get("SESSION_END_UTC", "21"))
 
+# For ENTRY_MODE=structure only — how many unmitigated order-block zones
+# (plus one supply/demand zone, if found) to keep as live candidates.
+OB_MAX_ZONES = int(os.environ.get("OB_MAX_ZONES", "3"))
+
+# For ENTRY_MODE=structure only — liquidity pool / sweep detection.
+# Two or more swing highs (or lows) within this ATR-multiple tolerance of
+# each other count as one "equal highs/lows" pool. Set LIQUIDITY_LOOKBACK
+# to 0 to disable the sweep requirement entirely.
+LIQUIDITY_LOOKBACK = int(os.environ.get("LIQUIDITY_LOOKBACK", "20"))
+
+# For ENTRY_MODE=structure only — the candle that breaks structure must
+# have a range of at least this many ATRs, so a marginal poke past the
+# level isn't treated as a real (displacement) break. Set to 0 to disable.
+DISPLACEMENT_ATR_MULT = float(os.environ.get("DISPLACEMENT_ATR_MULT", "1.0"))
+
+# For ENTRY_MODE=structure only — S/R confluence. The zone edge used for
+# entry must have been touched/respected at least this many times
+# historically (within SR_TOUCH_TOLERANCE_ATR_MULT). 0 disables the check.
+SR_MIN_TOUCHES = int(os.environ.get("SR_MIN_TOUCHES", "0"))
+SR_TOUCH_TOLERANCE_ATR_MULT = float(os.environ.get("SR_TOUCH_TOLERANCE_ATR_MULT", "0.25"))
+
+# For ENTRY_MODE=structure only — supply/demand zone detection: a tight
+# consolidation of SD_CONSOLIDATION_BARS bars followed by a move of at
+# least SD_MOVE_ATR_MULT * ATR counts as an additional candidate zone,
+# alongside order blocks.
+SD_CONSOLIDATION_BARS = int(os.environ.get("SD_CONSOLIDATION_BARS", "3"))
+SD_MOVE_ATR_MULT = float(os.environ.get("SD_MOVE_ATR_MULT", "1.5"))
+
 # For ENTRY_MODE=pullback only:
 # false = first valid pullback confirms; true = requires a deeper 50-79%
 # retracement of the breakout leg before confirming (used by Swing).
@@ -124,6 +168,20 @@ SWING_RETRACE_MAX = float(os.environ.get("SWING_RETRACE_MAX", "0.79"))
 STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "")
 STATE_FILENAME = os.environ.get("STATE_FILENAME", "state.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
+
+# ---- optional hold-time nudges (any subset can be set; unset = disabled) ----
+
+def _parse_optional_hours(env_name):
+    raw = os.environ.get(env_name, "").strip()
+    return float(raw) if raw else None
+
+
+DAY_MAX_HOLD_HOURS = _parse_optional_hours("DAY_MAX_HOLD_HOURS")
+DAY_SWING_MAX_HOLD_HOURS = _parse_optional_hours("DAY_SWING_MAX_HOLD_HOURS")
+SWING_MAX_HOLD_HOURS = _parse_optional_hours("SWING_MAX_HOLD_HOURS")
+HOLD_TIME_NUDGES_ENABLED = any(
+    v is not None for v in (DAY_MAX_HOLD_HOURS, DAY_SWING_MAX_HOLD_HOURS, SWING_MAX_HOLD_HOURS)
+)
 
 # ---- broker symbol mapping ----
 SYMBOL_SUFFIX = os.environ.get("BROKER_SYMBOL_SUFFIX", "m")
@@ -227,22 +285,34 @@ def get_bias(highs, lows):
     return None
 
 
-def check_structure_break(highs, lows, closes, bias):
+def check_structure_break(highs, lows, closes, bias, displacement_atr_mult=None, atr_val=None):
     """Structure timeframe: has price broken the most recent relevant
     swing in the direction of `bias`? Returns
     (bos_level, pullback_zone_price, bos_swing_index) or None.
     pullback_zone_price is the prior opposite swing — pullbacks should not
     trade back beyond it without invalidating the setup. bos_swing_index
-    is the bar index of the broken swing, used to locate the order block."""
+    is the bar index of the broken swing, used to locate the order block.
+
+    If `displacement_atr_mult` and `atr_val` are given, the breaking
+    candle's full range must be at least `displacement_atr_mult` * ATR —
+    filters out a marginal poke past the level from a genuine impulsive
+    (displacement) break. Used by ENTRY_MODE=structure only; leave
+    displacement_atr_mult=None to skip the check (retest/pullback modes)."""
     swings = find_swings(highs, lows, SWING_LOOKBACK)
     n = len(closes)
     last_close = closes[n - 1]
+
+    def displacement_ok():
+        if not displacement_atr_mult or not atr_val:
+            return True
+        candle_range = highs[n - 1] - lows[n - 1]
+        return candle_range >= displacement_atr_mult * atr_val
 
     if bias == "bullish":
         level_swing = last_swing_before(swings, "high", n - 1)
         if not level_swing:
             return None
-        if last_close > level_swing["price"]:
+        if last_close > level_swing["price"] and displacement_ok():
             anchor = last_swing_before(swings, "low", level_swing["i"])
             anchor_price = anchor["price"] if anchor else min(
                 lows[max(0, level_swing["i"] - 10):level_swing["i"]] or [lows[0]])
@@ -251,7 +321,7 @@ def check_structure_break(highs, lows, closes, bias):
         level_swing = last_swing_before(swings, "low", n - 1)
         if not level_swing:
             return None
-        if last_close < level_swing["price"]:
+        if last_close < level_swing["price"] and displacement_ok():
             anchor = last_swing_before(swings, "high", level_swing["i"])
             anchor_price = anchor["price"] if anchor else max(
                 highs[max(0, level_swing["i"] - 10):level_swing["i"]] or [highs[0]])
@@ -330,27 +400,120 @@ def check_retest_confirmation(highs, lows, closes, bias, bos_level, atr_val, loo
     return None
 
 
-# ---------------- SMC concepts: order block + session-filtered entry ----------------
-# Used by ENTRY_MODE=structure. Mirrors: 4H bias -> 1H structure break +
-# order block -> 5M engulfing/rejection confirmation inside that order
-# block, during London/NY session hours. Liquidity-pool (equal highs/lows)
-# detection is intentionally NOT implemented — it needs more heuristics to
-# do reliably, so it's left out rather than faked.
+# ---------------- SMC concepts: zones, liquidity, S/R confluence ----------------
+# Used by ENTRY_MODE=structure. Mirrors the top-down ladder: 4H bias ->
+# 1H displacement break, confirmed by a prior liquidity sweep -> order
+# block / supply-demand zones, optionally filtered by S/R confluence ->
+# 5M engulfing/rejection confirmation inside a zone, during London/NY
+# session hours.
 
-def find_order_block(opens, highs, lows, closes, bias, before_index, lookback=15):
-    """The order block is the last opposite-colored candle before the
-    impulsive move that broke structure — for a bullish break, the last
-    bearish (red) candle before the up-move; for bearish, the last
-    bullish (green) candle before the down-move."""
+def find_order_blocks(opens, highs, lows, closes, bias, before_index, lookback=15, max_zones=3):
+    """Up to `max_zones` order-block candidates before the break — each
+    is the last opposite-colored candle before an impulsive leg within
+    this lookback window (for a bullish break: the last bearish candle
+    before an up-move; for bearish: the last bullish candle before a
+    down-move). Ordered nearest-to-the-break first."""
     start = max(0, before_index - lookback)
+    zones = []
     for i in range(before_index - 1, start - 1, -1):
         is_bearish = closes[i] < opens[i]
         is_bullish = closes[i] > opens[i]
-        if bias == "bullish" and is_bearish:
-            return {"high": highs[i], "low": lows[i]}
-        if bias == "bearish" and is_bullish:
-            return {"high": highs[i], "low": lows[i]}
+        if (bias == "bullish" and is_bearish) or (bias == "bearish" and is_bullish):
+            zones.append({"high": highs[i], "low": lows[i], "type": "order_block"})
+        if len(zones) >= max_zones:
+            break
+    return zones
+
+
+def find_supply_demand_zone(opens, highs, lows, closes, bias, before_index, atr_val,
+                             consolidation_bars, move_atr_mult, lookback=30):
+    """A supply/demand zone: a tight multi-bar consolidation (base)
+    immediately followed by a strong displacement move of at least
+    `move_atr_mult` * ATR in the trend direction. The zone is the price
+    range of the consolidation base — price returning to it is treated
+    the same way an order block is (a place the move originated from)."""
+    if not atr_val or consolidation_bars < 1:
+        return None
+    start = max(0, before_index - lookback)
+    for end in range(before_index - 1, start + consolidation_bars, -1):
+        base_start = end - consolidation_bars
+        base_highs = highs[base_start:end]
+        base_lows = lows[base_start:end]
+        if not base_highs:
+            continue
+        base_range = max(base_highs) - min(base_lows)
+        if base_range > atr_val * 0.8:  # must actually be a tight base
+            continue
+        move = closes[end] - closes[base_start]
+        if bias == "bullish" and move >= move_atr_mult * atr_val:
+            return {"high": max(base_highs), "low": min(base_lows), "type": "demand_zone"}
+        if bias == "bearish" and move <= -move_atr_mult * atr_val:
+            return {"high": max(base_highs), "low": min(base_lows), "type": "supply_zone"}
     return None
+
+
+def find_liquidity_pools(swings, tolerance):
+    """Cluster nearby same-kind swing points into 'liquidity pools' —
+    levels price has reacted at more than once within `tolerance`, which
+    is where stop-loss/pending orders are assumed to cluster (equal
+    highs / equal lows). Returns a list of {"kind","price","last_i"}."""
+    pools = []
+    for kind in ("high", "low"):
+        pts = [s for s in swings if s["kind"] == kind]
+        used = set()
+        for i, s in enumerate(pts):
+            if i in used:
+                continue
+            cluster = [s]
+            for j in range(i + 1, len(pts)):
+                if j in used:
+                    continue
+                if abs(pts[j]["price"] - s["price"]) <= tolerance:
+                    cluster.append(pts[j])
+                    used.add(j)
+            if len(cluster) >= 2:
+                pools.append({
+                    "kind": kind,
+                    "price": sum(c["price"] for c in cluster) / len(cluster),
+                    "last_i": max(c["i"] for c in cluster),
+                })
+    return pools
+
+
+def liquidity_swept_before_break(pools, bias, bos_index, lookback_bars):
+    """True if, within `lookback_bars` before the structure break, price
+    took out (swept) a liquidity pool on the side opposite the breakout
+    direction — e.g. for a bullish break, a cluster of equal lows got run
+    first. That "stop hunt then reversal" is the confluence the SMC
+    playbook wants before trusting the break."""
+    opposite_kind = "low" if bias == "bullish" else "high"
+    for p in pools:
+        if p["kind"] != opposite_kind:
+            continue
+        if p["last_i"] >= bos_index:
+            continue
+        if bos_index - p["last_i"] > lookback_bars:
+            continue
+        return True
+    return False
+
+
+def count_level_touches(highs, lows, level, tolerance, lookback_bars, before_index):
+    """How many times price has come within `tolerance` of `level` in the
+    `lookback_bars` bars before `before_index` — used as S/R confluence: a
+    level that's been respected multiple times is more meaningful than an
+    arbitrary swing point. Consecutive touching bars only count once."""
+    start = max(0, before_index - lookback_bars)
+    touches = 0
+    i = start
+    in_touch = False
+    while i < before_index:
+        touching = lows[i] - tolerance <= level <= highs[i] + tolerance
+        if touching and not in_touch:
+            touches += 1
+        in_touch = touching
+        i += 1
+    return touches
 
 
 def is_engulfing(opens, closes, bias, i):
@@ -390,27 +553,29 @@ def in_session(iso_time, start_hour, end_hour):
     return hour >= start_hour or hour < end_hour  # wraps past midnight
 
 
-def check_smc_confirmation(times, opens, highs, lows, closes, bias, ob, session_start, session_end):
-    """5M: price trading inside the 1H order block, with either an
-    engulfing candle or a rejection wick in the trend direction, during
-    the configured session window."""
+def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end):
+    """5M: price trading inside any candidate zone (order block or
+    supply/demand), with either an engulfing candle or a rejection wick
+    in the trend direction, during the configured session window. Zones
+    are checked nearest-to-the-break first; the first one that matches
+    wins."""
     n = len(closes)
     i = n - 1
     if not in_session(times[i], session_start, session_end):
         return None
 
-    zone_low, zone_high = ob["low"], ob["high"]
-    price_in_zone = lows[i] <= zone_high and highs[i] >= zone_low
-    if not price_in_zone:
-        return None
-
-    if not (is_engulfing(opens, closes, bias, i) or
-            has_rejection_wick(opens, highs, lows, closes, bias, i, zone_low, zone_high)):
-        return None
-
-    entry = closes[i]
-    sl_anchor = zone_low if bias == "bullish" else zone_high
-    return {"entry": entry, "sl_anchor": sl_anchor}
+    for zone in zones:
+        zone_low, zone_high = zone["low"], zone["high"]
+        price_in_zone = lows[i] <= zone_high and highs[i] >= zone_low
+        if not price_in_zone:
+            continue
+        if not (is_engulfing(opens, closes, bias, i) or
+                has_rejection_wick(opens, highs, lows, closes, bias, i, zone_low, zone_high)):
+            continue
+        entry = closes[i]
+        sl_anchor = zone_low if bias == "bullish" else zone_high
+        return {"entry": entry, "sl_anchor": sl_anchor, "zone_type": zone.get("type", "order_block")}
+    return None
 
 
 # ---------------- state ----------------
@@ -557,6 +722,44 @@ def is_forex_market_open():
     return True
 
 
+# ---------------- hold-time nudges ----------------
+
+def check_hold_time_nudges(pair, setup):
+    """If a confirmed signal has been open a while, nudge the user via
+    Telegram at escalating hold-duration thresholds so a forgotten trade
+    doesn't run indefinitely. Only thresholds with a value set
+    (DAY_MAX_HOLD_HOURS / DAY_SWING_MAX_HOLD_HOURS / SWING_MAX_HOLD_HOURS)
+    are used. Each threshold notifies once (tracked in `setup`, which is
+    part of state.json).
+
+    NOTE: this only measures wall-clock time since the alert was sent —
+    it has no visibility into whether the trade is actually still open
+    (that lives on the broker/MT5 side, or in the user's own tracking),
+    so treat it as a "go check on this" reminder, not a real exit."""
+    if not HOLD_TIME_NUDGES_ENABLED or "confirmed_at" not in setup:
+        return
+    try:
+        confirmed_at = datetime.fromisoformat(setup["confirmed_at"])
+    except (ValueError, TypeError):
+        return
+    elapsed_hours = (datetime.now(timezone.utc) - confirmed_at).total_seconds() / 3600
+    notified = set(setup.get("notified_thresholds", []))
+
+    thresholds = [
+        ("day", DAY_MAX_HOLD_HOURS, "Day-trade hold window exceeded — worth reviewing this position."),
+        ("day_swing", DAY_SWING_MAX_HOLD_HOURS, "Day-swing hold window exceeded — worth reviewing this position."),
+        ("swing", SWING_MAX_HOLD_HOURS, "Max swing hold window exceeded — well past the usual timeframe, please review manually."),
+    ]
+    label = f"[{STRATEGY_LABEL}] " if STRATEGY_LABEL else ""
+    for key, threshold_hours, message in thresholds:
+        if threshold_hours is None or key in notified:
+            continue
+        if elapsed_hours >= threshold_hours:
+            send_telegram(f"⏰ {label}{pair} — {message}\nOpen for ~{elapsed_hours:.1f}h.")
+            notified.add(key)
+    setup["notified_thresholds"] = sorted(notified)
+
+
 # ---------------- per-pair pipeline ----------------
 
 def cache_fresh(cache, max_age_minutes):
@@ -604,17 +807,51 @@ def process_pair(pair, state):
     )
     if use_cached_structure:
         bos = tuple(structure_cache["bos"]) if structure_cache.get("bos") else None
-        ob = structure_cache.get("ob")
+        zones = structure_cache.get("zones", [])
+        liquidity_ok = structure_cache.get("liquidity_ok", True)
+        sr_ok = structure_cache.get("sr_ok", True)
     else:
-        times15, opens15, highs15, lows15, closes15 = fetch_series(pair, TF_STRUCTURE, outputsize=150)
+        times_s, opens_s, highs_s, lows_s, closes_s = fetch_series(pair, TF_STRUCTURE, outputsize=150)
         time.sleep(API_CALL_SLEEP)
-        bos = check_structure_break(highs15, lows15, closes15, bias)
-        ob = None
+        atr_s = atr(highs_s, lows_s, closes_s, 14)
+        bos = check_structure_break(
+            highs_s, lows_s, closes_s, bias,
+            displacement_atr_mult=(DISPLACEMENT_ATR_MULT if ENTRY_MODE == "structure" else None),
+            atr_val=atr_s,
+        )
+        zones, liquidity_ok, sr_ok = [], True, True
         if bos and ENTRY_MODE == "structure":
-            ob = find_order_block(opens15, highs15, lows15, closes15, bias, bos[2], OB_LOOKBACK)
+            bos_level, pullback_zone, bos_index = bos
+
+            zones = find_order_blocks(opens_s, highs_s, lows_s, closes_s, bias, bos_index, OB_LOOKBACK, OB_MAX_ZONES)
+            if len(zones) < OB_MAX_ZONES:
+                sd_zone = find_supply_demand_zone(
+                    opens_s, highs_s, lows_s, closes_s, bias, bos_index, atr_s,
+                    SD_CONSOLIDATION_BARS, SD_MOVE_ATR_MULT,
+                )
+                if sd_zone:
+                    zones.append(sd_zone)
+
+            if LIQUIDITY_LOOKBACK > 0:
+                tol = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s if atr_s else 0
+                swings_s = find_swings(highs_s, lows_s, SWING_LOOKBACK)
+                pools = find_liquidity_pools(swings_s, tol)
+                liquidity_ok = liquidity_swept_before_break(pools, bias, bos_index, LIQUIDITY_LOOKBACK)
+
+            if SR_MIN_TOUCHES > 0:
+                if zones:
+                    level = zones[0]["low"] if bias == "bullish" else zones[0]["high"]
+                    tol = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s if atr_s else 0
+                    touches = count_level_touches(highs_s, lows_s, level, tol, len(highs_s), bos_index)
+                    sr_ok = touches >= SR_MIN_TOUCHES
+                else:
+                    sr_ok = False
+
         pair_state["structure_cache"] = {
             "bos": list(bos) if bos else None,
-            "ob": ob,
+            "zones": zones,
+            "liquidity_ok": liquidity_ok,
+            "sr_ok": sr_ok,
             "bias_at_fetch": bias,
             "fetched_at": now_iso,
         }
@@ -629,21 +866,35 @@ def process_pair(pair, state):
                 "pullback_zone": pullback_zone,
                 "confirmed": False,
             }
-            if ENTRY_MODE == "structure" and ob:
-                new_setup["ob"] = ob
+            if ENTRY_MODE == "structure":
+                new_setup["zones"] = zones
+                new_setup["liquidity_ok"] = liquidity_ok
+                new_setup["sr_ok"] = sr_ok
             pair_state["setup"] = new_setup
             print(f"[{pair}] {bias} {TF_STRUCTURE} structure break at {bos_level:.5f}. Watching {TF_ENTRY} for confirmation.")
 
     setup = pair_state.get("setup")
     state[pair] = pair_state
 
-    if not setup or setup.get("confirmed"):
-        print(f"[{pair}] No active unconfirmed setup.")
+    if not setup:
+        print(f"[{pair}] No active setup.")
         return
 
-    if ENTRY_MODE == "structure" and not setup.get("ob"):
-        print(f"[{pair}] No order block found for this break — skipping.")
+    if setup.get("confirmed"):
+        check_hold_time_nudges(pair, setup)
+        print(f"[{pair}] Setup already confirmed — hold-time check done.")
         return
+
+    if ENTRY_MODE == "structure":
+        if not setup.get("zones"):
+            print(f"[{pair}] No order block / supply-demand zone found for this break — skipping.")
+            return
+        if not setup.get("liquidity_ok", True):
+            print(f"[{pair}] No liquidity sweep detected before the break — skipping (SMC confluence not met).")
+            return
+        if not setup.get("sr_ok", True):
+            print(f"[{pair}] Break level lacks S/R confluence — skipping.")
+            return
 
     # --- 5M entry: always fetched fresh, every run ---
     times5, opens5, highs5, lows5, closes5 = fetch_series(pair, TF_ENTRY, outputsize=150)
@@ -654,7 +905,7 @@ def process_pair(pair, state):
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
     elif ENTRY_MODE == "structure":
         confirmation = check_smc_confirmation(
-            times5, opens5, highs5, lows5, closes5, bias, setup["ob"], SESSION_START_UTC, SESSION_END_UTC)
+            times5, opens5, highs5, lows5, closes5, bias, setup["zones"], SESSION_START_UTC, SESSION_END_UTC)
     elif ENTRY_MODE == "retest_or_pullback":
         # Whichever fires first counts — checked in this order each run.
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
@@ -696,7 +947,7 @@ def process_pair(pair, state):
     emoji = "🟢" if signal == "BUY" else "🔴"
     mode_desc = {
         "retest": "breakout + retest",
-        "structure": "order block + engulfing/rejection (session-filtered)",
+        "structure": f"{confirmation.get('zone_type', 'order_block')} + engulfing/rejection (session-filtered)",
         "retest_or_pullback": f"retest+pullback mode ({confirmation.get('trigger')} fired)",
         "pullback": "deep pullback (50-79% retrace)" if SWING_ENTRY_MODE else "pullback",
     }.get(ENTRY_MODE, ENTRY_MODE)
@@ -705,11 +956,10 @@ def process_pair(pair, state):
     )
     msg = (
         f"{emoji} *{label}{signal} — {pair}*\n"
-        f"Bias: 4H {bias} | Structure: 15M BOS {setup['bos_level']:.{decimals}f} | Trigger: 5M {mode_desc}\n"
+        f"Bias: 4H {bias} | Structure: {TF_STRUCTURE} BOS {setup['bos_level']:.{decimals}f} | Trigger: 5M {mode_desc}\n"
         f"Entry: `{entry:.{decimals}f}`\n"
         f"SL: `{sl:.{decimals}f}`  (R = {r:.{decimals}f})\n"
         f"{tp_lines}\n"
-        f"No fixed time stop — manage by structure.\n"
         f"Bar: {times5[-1]} ({TF_ENTRY})"
     )
     if CHART_ENABLED:
@@ -732,6 +982,9 @@ def process_pair(pair, state):
 
     setup["confirmed"] = True
     setup["last_entry_bar_time"] = times5[-1]
+    if HOLD_TIME_NUDGES_ENABLED:
+        setup["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+        setup["notified_thresholds"] = []
     pair_state["setup"] = setup
     state[pair] = pair_state
 
