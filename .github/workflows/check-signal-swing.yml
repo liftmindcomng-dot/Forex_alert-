@@ -33,7 +33,7 @@ jobs:
           ENTRY_MODE: "structure"       # SMC: 1H order block/S&D zones + confluence, session-filtered
           OB_LOOKBACK: "15"
           OB_MAX_ZONES: "3"
-          REJECTION_WICK_RATIO: "2.0"    # left as-is — script still ignores this value (unwired), see notes
+          REJECTION_WICK_RATIO: "0.6"    # left as-is — script still ignores this value (unwired), see notes
           LIQUIDITY_LOOKBACK: "20"
           DISPLACEMENT_ATR_MULT: "1.0"
           SR_MIN_TOUCHES: "2"
