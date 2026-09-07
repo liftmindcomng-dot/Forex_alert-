@@ -1,6 +1,6 @@
 """
 backtest.py
-Walk-forward backtest for evaluate_swing_signal() (now living inside
+Walk-forward backtest for evaluate_swing_signal() (living inside
 forex_alert.py after merging smc_engine_v2 + time_stop into it), using
 real historical data pulled from Twelve Data (paginated, since a single
 call is capped at outputsize=5000).
@@ -19,9 +19,6 @@ the remaining fraction closes at current mark-to-market R.
 Outputs:
   - backtest_trades.csv   (one row per closed trade)
   - backtest_summary.json (aggregate stats)
-
-This does NOT call Telegram, MetaApi, or touch state.json for live
-running - it's a standalone historical simulation only.
 """
 
 import os
@@ -35,7 +32,6 @@ from datetime import datetime, timedelta, timezone
 
 from forex_alert import evaluate_swing_signal, atr, DAY_MAX_HOLD_HOURS, DAY_SWING_MAX_HOLD_HOURS, SWING_MAX_HOLD_HOURS
 
-# ==================== CONFIG ====================
 API_KEY = os.environ["TWELVE_DATA_API_KEY"]
 PAIR = os.environ.get("BACKTEST_PAIR", "XAU/USD")
 
@@ -66,7 +62,6 @@ TRADES_CSV = os.environ.get("TRADES_CSV", "backtest_trades.csv")
 SUMMARY_JSON = os.environ.get("SUMMARY_JSON", "backtest_summary.json")
 
 
-# ==================== PAGINATED HISTORICAL FETCH ====================
 def fetch_historical(pair, interval, start_date, end_date, max_per_call=5000):
     all_rows = []
     current_end = end_date
@@ -87,9 +82,9 @@ def fetch_historical(pair, interval, start_date, end_date, max_per_call=5000):
         if "values" not in data:
             msg = data.get("message", data)
             if "run out of API credits" in str(msg).lower() or data.get("code") == 429:
-                print(f"Rate limit hit — stopping pagination early with {len(all_rows)} rows so far.")
+                print("Rate limit hit — stopping pagination early with " + str(len(all_rows)) + " rows so far.")
                 break
-            raise RuntimeError(f"Twelve Data error [{pair} {interval}]: {msg}")
+            raise RuntimeError("Twelve Data error [" + pair + " " + interval + "]: " + str(msg))
 
         rows = data["values"]
         if not rows:
@@ -110,11 +105,16 @@ def fetch_historical(pair, interval, start_date, end_date, max_per_call=5000):
         seen[r["datetime"]] = r
     ordered = sorted(seen.values(), key=lambda r: r["datetime"])
 
-    return [
-        {"time": r["datetime"], "open": float(r["open"]), "high": float(r["high"]),
-         "low": float(r["low"]), "close": float(r["close"])}
-        for r in ordered
-    ]
+    result = []
+    for r in ordered:
+        result.append({
+            "time": r["datetime"],
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+        })
+    return result
 
 
 def in_session(iso_time, start_hour, end_hour):
@@ -127,8 +127,7 @@ def in_session(iso_time, start_hour, end_hour):
     return hour >= start_hour or hour < end_hour
 
 
-# ==================== TRADE SIMULATION ====================
-class OpenTrade:
+class OpenTrade(object):
     def __init__(self, signal, opened_at, opened_index):
         self.direction = signal["direction"]
         self.entry = signal["entry"]
@@ -138,10 +137,15 @@ class OpenTrade:
         self.condition_label = signal["condition_label"]
         self.opened_at = opened_at
         self.opened_index = opened_index
-        self.tp_prices = [
-            self.entry + m * self.r if self.direction == "bull" else self.entry - m * self.r
-            for m in TP_MULTIPLES
-        ]
+
+        tp_prices = []
+        for m in TP_MULTIPLES:
+            if self.direction == "bull":
+                tp_prices.append(self.entry + m * self.r)
+            else:
+                tp_prices.append(self.entry - m * self.r)
+        self.tp_prices = tp_prices
+
         self.tp_hit = [False] * len(self.tp_prices)
         self.remaining_fraction = 1.0
         self.realized_r = 0.0
@@ -150,17 +154,26 @@ class OpenTrade:
         self.close_time = None
 
     def max_hold_hours(self):
-        return {"DAY": DAY_MAX_HOLD_HOURS, "DAY/SWING": DAY_SWING_MAX_HOLD_HOURS,
-                "SWING": SWING_MAX_HOLD_HOURS}.get(self.duration_class, DAY_MAX_HOLD_HOURS)
+        limits = {
+            "DAY": DAY_MAX_HOLD_HOURS,
+            "DAY/SWING": DAY_SWING_MAX_HOLD_HOURS,
+            "SWING": SWING_MAX_HOLD_HOURS,
+        }
+        return limits.get(self.duration_class, DAY_MAX_HOLD_HOURS)
 
     def process_bar(self, candle, bar_time):
         if self.closed:
             return
 
-        hours_open = (datetime.strptime(bar_time, "%Y-%m-%d %H:%M:%S") -
-                      datetime.strptime(self.opened_at, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+        opened_dt = datetime.strptime(self.opened_at, "%Y-%m-%d %H:%M:%S")
+        now_dt = datetime.strptime(bar_time, "%Y-%m-%d %H:%M:%S")
+        hours_open = (now_dt - opened_dt).total_seconds() / 3600
 
-        sl_hit = (candle["low"] <= self.sl) if self.direction == "bull" else (candle["high"] >= self.sl)
+        if self.direction == "bull":
+            sl_hit = candle["low"] <= self.sl
+        else:
+            sl_hit = candle["high"] >= self.sl
+
         if sl_hit:
             self.realized_r += self.remaining_fraction * (-1.0)
             self.remaining_fraction = 0.0
@@ -169,10 +182,14 @@ class OpenTrade:
             self.close_time = bar_time
             return
 
-        for i, tp_price in enumerate(self.tp_prices):
+        for i in range(len(self.tp_prices)):
             if self.tp_hit[i]:
                 continue
-            hit = (candle["high"] >= tp_price) if self.direction == "bull" else (candle["low"] <= tp_price)
+            tp_price = self.tp_prices[i]
+            if self.direction == "bull":
+                hit = candle["high"] >= tp_price
+            else:
+                hit = candle["low"] <= tp_price
             if hit:
                 self.tp_hit[i] = True
                 self.realized_r += TP_FRACTION * TP_MULTIPLES[i]
@@ -185,7 +202,10 @@ class OpenTrade:
             return
 
         if hours_open >= self.max_hold_hours():
-            mtm_r = (candle["close"] - self.entry) / self.r if self.direction == "bull" else (self.entry - candle["close"]) / self.r
+            if self.direction == "bull":
+                mtm_r = (candle["close"] - self.entry) / self.r
+            else:
+                mtm_r = (self.entry - candle["close"]) / self.r
             self.realized_r += self.remaining_fraction * mtm_r
             self.remaining_fraction = 0.0
             self.closed = True
@@ -194,25 +214,35 @@ class OpenTrade:
 
     def to_row(self):
         return {
-            "direction": self.direction, "entry": self.entry, "sl": self.sl, "r_distance": self.r,
-            "duration_class": self.duration_class, "condition_label": self.condition_label,
-            "opened_at": self.opened_at, "closed_at": self.close_time, "close_reason": self.close_reason,
-            "tp_levels_hit": sum(self.tp_hit), "realized_r": round(self.realized_r, 3),
+            "direction": self.direction,
+            "entry": self.entry,
+            "sl": self.sl,
+            "r_distance": self.r,
+            "duration_class": self.duration_class,
+            "condition_label": self.condition_label,
+            "opened_at": self.opened_at,
+            "closed_at": self.close_time,
+            "close_reason": self.close_reason,
+            "tp_levels_hit": sum(self.tp_hit),
+            "realized_r": round(self.realized_r, 3),
         }
 
 
-# ==================== MAIN BACKTEST LOOP ====================
 def run_backtest():
-    print(f"Fetching {TF_TREND} candles for {PAIR} ({START_DATE} to {END_DATE})...")
+    print("Fetching " + TF_TREND + " candles for " + PAIR + " (" + START_DATE + " to " + END_DATE + ")...")
     trend_all = fetch_historical(PAIR, TF_TREND, START_DATE, END_DATE)
     time.sleep(API_CALL_SLEEP)
-    print(f"Fetching {TF_STRUCTURE} candles for {PAIR}...")
+
+    print("Fetching " + TF_STRUCTURE + " candles for " + PAIR + "...")
     structure_all = fetch_historical(PAIR, TF_STRUCTURE, START_DATE, END_DATE)
     time.sleep(API_CALL_SLEEP)
-    print(f"Fetching {TF_ENTRY} candles for {PAIR}...")
+
+    print("Fetching " + TF_ENTRY + " candles for " + PAIR + "...")
     entry_all = fetch_historical(PAIR, TF_ENTRY, START_DATE, END_DATE)
 
-    print(f"Loaded: {len(trend_all)} {TF_TREND} bars, {len(structure_all)} {TF_STRUCTURE} bars, {len(entry_all)} {TF_ENTRY} bars.")
+    print("Loaded: " + str(len(trend_all)) + " " + TF_TREND + " bars, " +
+          str(len(structure_all)) + " " + TF_STRUCTURE + " bars, " +
+          str(len(entry_all)) + " " + TF_ENTRY + " bars.")
 
     if len(entry_all) < 100:
         print("Not enough entry-TF data to backtest meaningfully — check date range / API limits.")
@@ -253,10 +283,16 @@ def run_backtest():
             continue
 
         signal = evaluate_swing_signal(
-            trend_candles=trend_window, structure_candles=structure_window, entry_candles=entry_window,
-            pair_state=pair_state, swing_lookback=SWING_LOOKBACK, ob_max_zones=OB_MAX_ZONES,
-            liquidity_lookback=LIQUIDITY_LOOKBACK, displacement_atr_mult=DISPLACEMENT_ATR_MULT,
-            rejection_wick_ratio=SMC_REJECTION_WICK_RATIO, sl_buffer_atr_mult=SL_BUFFER_ATR_MULT,
+            trend_candles=trend_window,
+            structure_candles=structure_window,
+            entry_candles=entry_window,
+            pair_state=pair_state,
+            swing_lookback=SWING_LOOKBACK,
+            ob_max_zones=OB_MAX_ZONES,
+            liquidity_lookback=LIQUIDITY_LOOKBACK,
+            displacement_atr_mult=DISPLACEMENT_ATR_MULT,
+            rejection_wick_ratio=SMC_REJECTION_WICK_RATIO,
+            sl_buffer_atr_mult=SL_BUFFER_ATR_MULT,
             sr_min_touches=SR_MIN_TOUCHES,
         )
 
@@ -265,53 +301,86 @@ def run_backtest():
 
     total = len(closed_trades)
     wins = [t for t in closed_trades if t["realized_r"] > 0]
-    win_rate = round(len(wins) / total * 100, 1) if total else 0.0
-    avg_r = round(sum(t["realized_r"] for t in closed_trades) / total, 3) if total else 0.0
+
+    if total > 0:
+        win_rate = round(len(wins) / total * 100, 1)
+        avg_r = round(sum(t["realized_r"] for t in closed_trades) / total, 3)
+    else:
+        win_rate = 0.0
+        avg_r = 0.0
+
     total_r = round(sum(t["realized_r"] for t in closed_trades), 2)
 
-    max_consec_losses = cur_consec = 0
+    max_consec_losses = 0
+    cur_consec = 0
     running_r = 0.0
     peak_r = 0.0
     max_drawdown_r = 0.0
+
     for t in closed_trades:
         if t["realized_r"] <= 0:
             cur_consec += 1
-            max_consec_losses = max(max_consec_losses, cur_consec)
+            if cur_consec > max_consec_losses:
+                max_consec_losses = cur_consec
         else:
             cur_consec = 0
         running_r += t["realized_r"]
-        peak_r = max(peak_r, running_r)
-        max_drawdown_r = min(max_drawdown_r, running_r - peak_r)
+        if running_r > peak_r:
+            peak_r = running_r
+        drawdown = running_r - peak_r
+        if drawdown < max_drawdown_r:
+            max_drawdown_r = drawdown
 
     by_reason = {}
     for t in closed_trades:
-        by_reason[t["close_reason"]] = by_reason.get(t["close_reason"], 0) + 1
+        reason = t["close_reason"]
+        by_reason[reason] = by_reason.get(reason, 0) + 1
 
     by_condition = {}
     for t in closed_trades:
         key = t["condition_label"]
-        by_condition.setdefault(key, {"count": 0, "total_r": 0.0})
+        if key not in by_condition:
+            by_condition[key] = {"count": 0, "total_r": 0.0}
         by_condition[key]["count"] += 1
         by_condition[key]["total_r"] += t["realized_r"]
 
+    performance_by_condition = {}
+    for k, v in by_condition.items():
+        performance_by_condition[k] = {
+            "count": v["count"],
+            "avg_r": round(v["total_r"] / v["count"], 3),
+        }
+
     summary = {
-        "pair": PAIR, "period": f"{START_DATE} to {END_DATE}",
-        "total_trades": total, "win_rate_pct": win_rate,
-        "avg_r_per_trade": avg_r, "total_r": total_r,
-        "max_consecutive_losses": max_consec_losses, "max_drawdown_r": round(max_drawdown_r, 2),
+        "pair": PAIR,
+        "period": START_DATE + " to " + END_DATE,
+        "total_trades": total,
+        "win_rate_pct": win_rate,
+        "avg_r_per_trade": avg_r,
+        "total_r": total_r,
+        "max_consecutive_losses": max_consec_losses,
+        "max_drawdown_r": round(max_drawdown_r, 2),
         "close_reason_breakdown": by_reason,
-        "performance_by_condition_label": {
-            k: {"count": v["count"], "avg_r": round(v["total_r"] / v["count"], 3)}
-            for k, v in by_condition.items()
-        },
+        "performance_by_condition_label": performance_by_condition,
     }
 
     with open(SUMMARY_JSON, "w") as f:
         json.dump(summary, f, indent=2)
 
     if closed_trades:
-            if closed_trades:
         with open(TRADES_CSV, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(closed_trades[0].keys()))
             writer.writeheader()
             writer.writerows(closed_trades)
+
+    print(json.dumps(summary, indent=2))
+    print("")
+    print("Wrote " + TRADES_CSV + " and " + SUMMARY_JSON + ".")
+
+
+if __name__ == "__main__":
+    try:
+        run_backtest()
+    except Exception as e:
+        print("ERROR: " + str(e), file=sys.stderr)
+        sys.exit(1)
