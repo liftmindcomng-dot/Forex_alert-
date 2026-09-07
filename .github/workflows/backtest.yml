@@ -1,18 +1,3 @@
-# .github/workflows/backtest.yml
-#
-# Runs the Swing STRUCTURE (SMC) backtest on demand or on a schedule.
-# Upload a 1-minute OHLC CSV as an artifact or place Histdata-style files
-# in a data/ folder; otherwise the job will fail with a clear message.
-#
-# Trigger:
-#   - Manual (workflow_dispatch) – recommended
-#   - Optional weekly schedule (commented out)
-#
-# Outputs (uploaded as artifacts):
-#   - backtest_trades.csv
-#   - backtest_equity.png
-#   - backtest_summary.txt
-
 name: Backtest Swing SMC
 
 on:
@@ -30,9 +15,6 @@ on:
         description: "Pair (reporting only)"
         required: false
         default: "XAU/USD"
-  # Uncomment to run automatically every Sunday at 02:00 UTC
-  # schedule:
-  #   - cron: "0 2 * * 0"
 
 permissions:
   contents: read
@@ -50,7 +32,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -68,7 +49,6 @@ jobs:
           if [ -n "$END_DATE" ]; then
             ARGS="$ARGS --end \"$END_DATE\""
           fi
-          # Prefer a data file if the user uploaded one or keeps it in the repo
           if [ -f data/xauusd_1m.csv ]; then
             ARGS="$ARGS --data data/xauusd_1m.csv"
           elif [ -f data/XAUUSD_M1.csv ]; then
