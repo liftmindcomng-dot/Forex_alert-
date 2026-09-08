@@ -51,7 +51,7 @@ jobs:
           OB_MAX_ZONES: "3"
           LIQUIDITY_LOOKBACK: "20"
           DISPLACEMENT_ATR_MULT: "1.0"
-          REJECTION_WICK_RATIO: "0.6"
+          REJECTION_WICK_RATIO: "1.0"
           SR_MIN_TOUCHES: "2"
           SR_TOUCH_TOLERANCE_ATR_MULT: "0.25"
           SD_CONSOLIDATION_BARS: "3"
