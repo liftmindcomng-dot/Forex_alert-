@@ -26,16 +26,12 @@
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": [
-        4407.61636,
-        4390.29003,
-        144
-      ],
+      "bos": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-08T13:00:35.725594+00:00"
+      "fetched_at": "2026-09-08T13:15:24.491913+00:00"
     }
   }
 }
