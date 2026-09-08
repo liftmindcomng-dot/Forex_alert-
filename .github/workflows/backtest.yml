@@ -35,8 +35,9 @@ jobs:
       - name: Run backtest
         env:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
-          TELEGRAM_BOT_TOKEN: "dummy"
-          TELEGRAM_CHAT_ID: "dummy"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STRATEGY_LABEL: "SWING"
           BACKTEST_PAIR: ${{ github.event.inputs.pair }}
           BACKTEST_START: ${{ github.event.inputs.start_date }}
           BACKTEST_END: ${{ github.event.inputs.end_date }}
