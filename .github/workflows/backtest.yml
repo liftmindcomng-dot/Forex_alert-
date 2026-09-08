@@ -5,15 +5,15 @@ on:
     inputs:
       pair:
         description: "Pair to backtest (e.g. XAU/USD)"
-        required: false
+        required: true
         default: "XAU/USD"
       start_date:
         description: "Backtest start date (YYYY-MM-DD)"
-        required: false
+        required: true
         default: "2024-01-01"
       end_date:
         description: "Backtest end date (YYYY-MM-DD)"
-        required: false
+        required: true
         default: ""
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
           BACKTEST_END: ${{ github.event.inputs.end_date }}
           TF_TREND: "4h"
           TF_STRUCTURE: "1h"
-          TF_ENTRY: "5min"
+          TF_ENTRY: "15min"
           ENTRY_MODE: "structure"
           SWING_LOOKBACK: "2"
           SL_BUFFER_ATR_MULT: "0.15"
