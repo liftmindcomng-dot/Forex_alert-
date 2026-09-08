@@ -13,7 +13,7 @@ on:
         default: "2024-01-01"
       end_date:
         description: "Backtest end date (YYYY-MM-DD)"
-        required: true
+        required: false
         default: ""
 
 permissions:
