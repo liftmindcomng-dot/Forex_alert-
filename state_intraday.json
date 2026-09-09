@@ -29,13 +29,13 @@
       "bos": [
         4360.14825,
         4351.04207,
-        142
+        141
       ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-09T01:30:24.084654+00:00"
+      "fetched_at": "2026-09-09T01:45:26.223640+00:00"
     }
   }
 }
