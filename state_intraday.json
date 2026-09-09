@@ -16,7 +16,7 @@
   "XAU/USD": {
     "trend_cache": {
       "bias": "bullish",
-      "fetched_at": "2026-09-09T00:20:30.445463+00:00"
+      "fetched_at": "2026-09-09T04:15:28.968459+00:00"
     },
     "setup": {
       "bos_level": 4377.51707,
@@ -31,7 +31,7 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-09T04:00:28.801169+00:00"
+      "fetched_at": "2026-09-09T04:15:28.968459+00:00"
     }
   }
 }
