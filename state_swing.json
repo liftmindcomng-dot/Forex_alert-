@@ -18,15 +18,85 @@
       "bias": "bearish",
       "fetched_at": "2026-09-13T22:00:22.694241+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4348.29698,
+      "pullback_zone": 4348.56625,
+      "confirmed": false,
+      "zones": [
+        {
+          "high": 4348.56436,
+          "low": 4348.30093,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.56379,
+          "low": 4348.29978,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.56058,
+          "low": 4348.29888,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
+      "sr_ok": true,
+      "is_choch": false
+    },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "zones": [],
-      "liquidity_ok": true,
+      "bos": [
+        4348.29698,
+        4348.56625,
+        112
+      ],
+      "zones": [
+        {
+          "high": 4348.56436,
+          "low": 4348.30093,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.56379,
+          "low": 4348.29978,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.56058,
+          "low": 4348.29888,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
       "sr_ok": true,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-13T22:00:22.694241+00:00"
-    }
+      "fetched_at": "2026-09-13T22:55:21.335997+00:00"
+    },
+    "order_blocks": [
+      {
+        "top": 4348.56436,
+        "bot": 4348.30093,
+        "type": "order_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4348.56379,
+        "bot": 4348.29978,
+        "type": "order_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4348.56058,
+        "bot": 4348.29888,
+        "type": "order_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      }
+    ]
   }
 }
