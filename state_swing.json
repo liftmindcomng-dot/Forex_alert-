@@ -19,60 +19,81 @@
       "fetched_at": "2026-09-14T05:45:23.232112+00:00"
     },
     "setup": {
-      "bos_level": 4348.29698,
-      "pullback_zone": 4348.56625,
+      "bos_level": 4324.20016,
+      "pullback_zone": 4350.78374,
       "confirmed": false,
+      "is_choch": false,
+      "displacement_hit": true,
       "zones": [
         {
-          "high": 4348.56436,
-          "low": 4348.30093,
+          "high": 4346.31433,
+          "low": 4330.87954,
           "type": "order_block"
         },
         {
-          "high": 4348.56379,
-          "low": 4348.29978,
+          "high": 4348.70569,
+          "low": 4347.82609,
           "type": "order_block"
         },
         {
-          "high": 4348.56058,
-          "low": 4348.29888,
+          "high": 4348.56219,
+          "low": 4348.2924,
           "type": "order_block"
         }
       ],
-      "liquidity_ok": false,
-      "sr_ok": true,
-      "is_choch": false
+      "liquidity_ok": true,
+      "sr_ok": true
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "zones": [],
+      "bos": [
+        4324.20016,
+        4350.78374,
+        141
+      ],
+      "zones": [
+        {
+          "high": 4346.31433,
+          "low": 4330.87954,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.70569,
+          "low": 4347.82609,
+          "type": "order_block"
+        },
+        {
+          "high": 4348.56219,
+          "low": 4348.2924,
+          "type": "order_block"
+        }
+      ],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": false,
+      "displacement_hit": true,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-14T08:30:27.109794+00:00"
+      "fetched_at": "2026-09-14T09:25:24.154511+00:00"
     },
     "order_blocks": [
       {
-        "top": 4348.56436,
-        "bot": 4348.30093,
+        "top": 4346.31433,
+        "bot": 4330.87954,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4348.56379,
-        "bot": 4348.29978,
+        "top": 4348.70569,
+        "bot": 4347.82609,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4348.56058,
-        "bot": 4348.29888,
+        "top": 4348.56219,
+        "bot": 4348.2924,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
