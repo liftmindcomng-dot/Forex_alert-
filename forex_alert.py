@@ -10,18 +10,22 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
   - 5M  : entry confirmation method, per ENTRY_MODE:
 
     STRUCTURE  (ENTRY_MODE=structure): SMC-style top-down ladder.
-    1H structure break, filtered by a displacement check and a liquidity
-    sweep. Candidate zones (order blocks + supply/demand) persist across
-    runs in state.json with mitigation tracking — a zone stops being
-    tradeable once price closes fully through it, rather than being
-    rebuilt from scratch on every new break. Each break is tagged CHoCH
-    (reverses the prior bias) or BOS (continues it). Entry confirms on a
-    5M engulfing candle, rejection wick, or fresh fair value gap inside
-    any active zone, restricted to the London/NY session window. Each
-    confirmed signal gets a condition label (e.g. "OB+CHoCH+FVG+LIQ+SR")
-    and a conviction score that sets its hold-duration class (day /
-    day_swing / swing), which in turn selects which single hold-time
-    threshold applies to it.
+    1H structure break, filtered by a displacement check. A liquidity
+    sweep in the 20 bars before the break is detected and scored as a
+    conviction booster (see classify_conviction) rather than required —
+    most genuine breaks don't have a textbook equal-highs/lows pool
+    sitting right before them, so gating on it starved the setup of
+    signals. Candidate zones (order blocks + supply/demand) persist
+    across runs in state.json with mitigation tracking — a zone stops
+    being tradeable once price closes fully through it, rather than
+    being rebuilt from scratch on every new break. Each break is tagged
+    CHoCH (reverses the prior bias) or BOS (continues it). Entry
+    confirms on a 5M engulfing candle, rejection wick, or fresh fair
+    value gap inside any active zone, restricted to the London/NY
+    session window. Each confirmed signal gets a condition label (e.g.
+    "OB+CHoCH+FVG+LIQ+SR") and a conviction score that sets its
+    hold-duration class (day / day_swing / swing), which in turn selects
+    which single hold-time threshold applies to it.
 
     RETEST     (ENTRY_MODE=retest): breakout + retest — price must come
     back and touch the exact broken 15M level, then close back beyond
@@ -141,7 +145,9 @@ OB_MAX_ZONES = int(os.environ.get("OB_MAX_ZONES", "3"))
 # For ENTRY_MODE=structure only — liquidity pool / sweep detection.
 # Two or more swing highs (or lows) within this ATR-multiple tolerance of
 # each other count as one "equal highs/lows" pool. Set LIQUIDITY_LOOKBACK
-# to 0 to disable the sweep requirement entirely.
+# to 0 to disable sweep detection entirely. NOTE: a detected sweep now
+# only boosts conviction score (see classify_conviction) — it is not a
+# hard requirement to enter (see change log at bottom of this section).
 LIQUIDITY_LOOKBACK = int(os.environ.get("LIQUIDITY_LOOKBACK", "20"))
 
 # For ENTRY_MODE=structure only — the candle that breaks structure must
@@ -410,10 +416,10 @@ def check_retest_confirmation(highs, lows, closes, bias, bos_level, atr_val, loo
 
 # ---------------- SMC concepts: zones, liquidity, S/R confluence ----------------
 # Used by ENTRY_MODE=structure. Mirrors the top-down ladder: 4H bias ->
-# 1H displacement break, confirmed by a prior liquidity sweep -> order
-# block / supply-demand zones, optionally filtered by S/R confluence ->
-# 5M engulfing/rejection/FVG confirmation inside a zone, during London/NY
-# session hours.
+# 1H displacement break, scored (not gated) by a prior liquidity sweep ->
+# order block / supply-demand zones, optionally filtered by S/R
+# confluence -> 5M engulfing/rejection/FVG confirmation inside a zone,
+# during London/NY session hours.
 
 def find_order_blocks(opens, highs, lows, closes, bias, before_index, lookback=15, max_zones=3):
     """Up to `max_zones` order-block candidates before the break — each
@@ -493,7 +499,8 @@ def liquidity_swept_before_break(pools, bias, bos_index, lookback_bars):
     took out (swept) a liquidity pool on the side opposite the breakout
     direction — e.g. for a bullish break, a cluster of equal lows got run
     first. That "stop hunt then reversal" is the confluence the SMC
-    playbook wants before trusting the break."""
+    playbook rewards with higher conviction (see classify_conviction) —
+    it is not required to enter."""
     opposite_kind = "low" if bias == "bullish" else "high"
     for p in pools:
         if p["kind"] != opposite_kind:
@@ -1029,9 +1036,15 @@ def process_pair(pair, state):
         if not setup.get("zones"):
             print(f"[{pair}] No order block / supply-demand zone found for this break — skipping.")
             return
-        if not setup.get("liquidity_ok", True):
-            print(f"[{pair}] No liquidity sweep detected before the break — skipping (SMC confluence not met).")
-            return
+        # NOTE: liquidity sweep is intentionally NOT gated here anymore.
+        # It used to hard-block entry when no sweep was detected, but a
+        # genuine equal-highs/lows pool swept right before the break is
+        # a fairly rare, specific pattern — gating on it starved the
+        # setup of otherwise-valid signals for a week straight. It's
+        # still detected (setup["liquidity_ok"]) and still feeds
+        # classify_conviction() as a score booster below, so a sweep
+        # still earns a longer expected hold and shows "LIQ" in the
+        # condition label — it just no longer blocks entry on its own.
         if not setup.get("sr_ok", True):
             print(f"[{pair}] Break level lacks S/R confluence — skipping.")
             return
