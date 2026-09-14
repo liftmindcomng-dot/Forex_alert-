@@ -715,6 +715,37 @@ def classify_conviction(is_choch, confirmations, sr_hit, sd_hit):
         return "day", "Lower conviction, single-confirmation setup — treat as intraday."
 
 
+def classify_conviction_generic(is_choch, displacement_hit, trigger, deep_retrace):
+    """Lighter-weight conviction scorer for the non-structure modes
+    (retest / pullback / retest_or_pullback), which have no zones,
+    liquidity sweep, or FVG to draw on. Same duration-class thresholds
+    as classify_conviction so hold-time nudging works identically."""
+    score = 0
+    if is_choch:
+        score += 2
+    if displacement_hit:
+        score += 2
+    if trigger == "retest":
+        score += 1
+    if deep_retrace:
+        score += 1
+
+    if score >= 5:
+        return "swing", "High conviction (CHoCH + displacement) — manage by structure."
+    elif score >= 3:
+        return "day_swing", "Moderate conviction — consider partial at 1-2R, trail the rest."
+    else:
+        return "day", "Lower conviction, single-confirmation setup — treat as intraday."
+
+
+def build_condition_label_generic(is_choch, displacement_hit, trigger):
+    parts = ["CHoCH" if is_choch else "BOS"]
+    if displacement_hit:
+        parts.append("DISP")
+    parts.append(trigger.upper())
+    return "+".join(parts)
+
+
 # ---------------- state ----------------
 
 def load_state():
@@ -950,6 +981,7 @@ def process_pair(pair, state):
         zones = structure_cache.get("zones", [])
         liquidity_ok = structure_cache.get("liquidity_ok", True)
         sr_ok = structure_cache.get("sr_ok", True)
+        displacement_hit = structure_cache.get("displacement_hit", False)
     else:
         times_s, opens_s, highs_s, lows_s, closes_s = fetch_series(pair, TF_STRUCTURE, outputsize=150)
         time.sleep(API_CALL_SLEEP)
@@ -960,6 +992,9 @@ def process_pair(pair, state):
             atr_val=atr_s,
         )
         zones, liquidity_ok, sr_ok = [], True, True
+        displacement_hit = (
+            bool(atr_s) and (highs_s[-1] - lows_s[-1]) >= DISPLACEMENT_ATR_MULT * atr_s
+        ) if bos else False
         if bos and ENTRY_MODE == "structure":
             bos_level, pullback_zone, bos_index = bos
 
@@ -998,6 +1033,7 @@ def process_pair(pair, state):
             "zones": zones,
             "liquidity_ok": liquidity_ok,
             "sr_ok": sr_ok,
+            "displacement_hit": displacement_hit,
             "bias_at_fetch": bias,
             "fetched_at": now_iso,
         }
@@ -1011,6 +1047,8 @@ def process_pair(pair, state):
                 "bos_level": bos_level,
                 "pullback_zone": pullback_zone,
                 "confirmed": False,
+                "is_choch": bias_flipped,
+                "displacement_hit": displacement_hit,
             }
             if ENTRY_MODE == "structure":
                 new_setup["zones"] = zones
@@ -1100,6 +1138,14 @@ def process_pair(pair, state):
         confirmation["condition_label"] = build_condition_label(is_choch, full_confirmations, sr_hit, sd_hit)
         confirmation["duration_class"], confirmation["duration_note"] = classify_conviction(
             is_choch, full_confirmations, sr_hit, sd_hit)
+    else:
+        is_choch = setup.get("is_choch", False)
+        displacement_hit = setup.get("displacement_hit", False)
+        trigger = confirmation.get("trigger", ENTRY_MODE)
+        deep_retrace = SWING_ENTRY_MODE and trigger == "pullback"
+        confirmation["condition_label"] = build_condition_label_generic(is_choch, displacement_hit, trigger)
+        confirmation["duration_class"], confirmation["duration_note"] = classify_conviction_generic(
+            is_choch, displacement_hit, trigger, deep_retrace)
 
     entry = confirmation["entry"]
     buffer = SL_BUFFER_ATR_MULT * a5
@@ -1130,7 +1176,7 @@ def process_pair(pair, state):
     }.get(ENTRY_MODE, ENTRY_MODE)
 
     setup_line = ""
-    if ENTRY_MODE == "structure":
+    if confirmation.get("duration_class"):
         cls = confirmation.get("duration_class", "day").replace("_", "/").upper()
         setup_line = f"Setup: {confirmation.get('condition_label', '')} | Conviction: {cls} — {confirmation.get('duration_note', '')}\n"
 
@@ -1166,9 +1212,8 @@ def process_pair(pair, state):
 
     setup["confirmed"] = True
     setup["last_entry_bar_time"] = times5[-1]
-    if ENTRY_MODE == "structure":
-        setup["duration_class"] = confirmation.get("duration_class", "day")
-        setup["condition_label"] = confirmation.get("condition_label", "")
+    setup["duration_class"] = confirmation.get("duration_class", "day")
+    setup["condition_label"] = confirmation.get("condition_label", "")
     if HOLD_TIME_NUDGES_ENABLED:
         setup["confirmed_at"] = datetime.now(timezone.utc).isoformat()
         setup["notified"] = False
