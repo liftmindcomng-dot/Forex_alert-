@@ -40,6 +40,9 @@ jobs:
           RETEST_TOLERANCE_ATR_MULT: "0.3"
           SWING_ENTRY_MODE: "false"         # pullback fallback uses shallow (first valid) pullback, not deep retrace
           TP_MULTIPLES: "1,2,3,4,5"
+          DAY_MAX_HOLD_HOURS: "24"
+          DAY_SWING_MAX_HOLD_HOURS: "72"
+          SWING_MAX_HOLD_HOURS: "240"
           AUTO_TRADE_ENABLED: "false"
           METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
           METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
