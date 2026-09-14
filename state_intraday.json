@@ -19,20 +19,30 @@
       "fetched_at": "2026-09-14T05:55:24.969939+00:00"
     },
     "setup": {
-      "bos_level": 4327.08502,
+      "bos_level": 4322.3619,
       "pullback_zone": 4355.11149,
       "confirmed": true,
-      "last_entry_bar_time": "2026-09-14 04:45:00"
+      "is_choch": false,
+      "displacement_hit": false,
+      "last_entry_bar_time": "2026-09-14 07:00:00",
+      "duration_class": "day",
+      "condition_label": "BOS+PULLBACK",
+      "confirmed_at": "2026-09-14T07:06:20.940617+00:00",
+      "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4322.3619,
+        4355.11149,
+        144
+      ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-14T06:50:26.548778+00:00"
+      "fetched_at": "2026-09-14T07:05:57.569698+00:00"
     }
   }
 }
