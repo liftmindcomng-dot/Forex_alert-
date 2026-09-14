@@ -137,6 +137,14 @@ REJECTION_WICK_RATIO = float(os.environ.get("REJECTION_WICK_RATIO", "0.5"))
 SESSION_START_UTC = int(os.environ.get("SESSION_START_UTC", "7"))
 SESSION_END_UTC = int(os.environ.get("SESSION_END_UTC", "21"))
 
+# Second, independently-toggleable session window — Sydney+Tokyo/Asian
+# combined (~21:00-09:00 UTC, wraps midnight; the two overlap so they
+# form one continuous block). Off by default since, together with
+# London/NY above, enabling this covers essentially the full 24h day.
+SESSION2_ENABLED = os.environ.get("SESSION2_ENABLED", "false").lower() == "true"
+SESSION2_START_UTC = int(os.environ.get("SESSION2_START_UTC", "21"))
+SESSION2_END_UTC = int(os.environ.get("SESSION2_END_UTC", "9"))
+
 # For ENTRY_MODE=structure only — how many unmitigated order-block zones
 # (plus one supply/demand zone, if found) to keep as live candidates,
 # per direction (persisted across runs — see sync_order_blocks).
@@ -571,7 +579,7 @@ def detect_fvg(opens, highs, lows, closes, i):
 
 
 def in_session(iso_time, start_hour, end_hour):
-    """London/NY session filter (UTC hours). fetch_series requests
+    """Single window check (UTC hours). fetch_series requests
     timezone=UTC explicitly, so iso_time is guaranteed to be UTC here."""
     try:
         hour = int(iso_time[11:13])
@@ -580,6 +588,18 @@ def in_session(iso_time, start_hour, end_hour):
     if start_hour <= end_hour:
         return start_hour <= hour < end_hour
     return hour >= start_hour or hour < end_hour  # wraps past midnight
+
+
+def in_any_session(iso_time):
+    """True if iso_time falls in the London/NY window, OR (when enabled)
+    the Sydney/Asian window. Used everywhere the old single-window
+    in_session(times[i], SESSION_START_UTC, SESSION_END_UTC) call used
+    to be."""
+    if in_session(iso_time, SESSION_START_UTC, SESSION_END_UTC):
+        return True
+    if SESSION2_ENABLED and in_session(iso_time, SESSION2_START_UTC, SESSION2_END_UTC):
+        return True
+    return False
 
 
 def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end):
@@ -592,7 +612,7 @@ def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, sessi
     and conviction score)."""
     n = len(closes)
     i = n - 1
-    if not in_session(times[i], session_start, session_end):
+    if not in_any_session(times[i]):
         return None
 
     trend_word = "bull" if bias == "bullish" else "bear"
