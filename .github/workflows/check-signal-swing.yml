@@ -42,6 +42,9 @@ jobs:
           SD_MOVE_ATR_MULT: "1.5"
           SESSION_START_UTC: "7"        # London/NY combined window
           SESSION_END_UTC: "21"
+          SESSION2_ENABLED: "true"
+          SESSION2_START_UTC: "21"
+          SESSION2_END_UTC: "9"
           TP_MULTIPLES: "1,2,3,4,5"
           DAY_MAX_HOLD_HOURS: "24"       # hold-time nudge thresholds (one-time Telegram reminders)
           DAY_SWING_MAX_HOLD_HOURS: "72"
