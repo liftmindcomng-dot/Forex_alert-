@@ -21,9 +21,14 @@
     "setup": {
       "bos_level": 4264.02865,
       "pullback_zone": 4295.07882,
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
-      "displacement_hit": false
+      "displacement_hit": false,
+      "last_entry_bar_time": "2026-09-15 11:30:00",
+      "duration_class": "day",
+      "condition_label": "BOS+PULLBACK",
+      "confirmed_at": "2026-09-15T11:35:50.716211+00:00",
+      "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
@@ -33,7 +38,7 @@
       "sr_ok": true,
       "displacement_hit": false,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-15T11:20:24.784423+00:00"
+      "fetched_at": "2026-09-15T11:35:20.009854+00:00"
     }
   }
 }
