@@ -27,17 +27,13 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4264.02865,
-        4295.07882,
-        144
-      ],
+      "bos": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-15T09:20:22.552559+00:00"
+      "fetched_at": "2026-09-15T09:35:21.510539+00:00"
     }
   }
 }
