@@ -18,16 +18,26 @@
       "bias": "bullish",
       "fetched_at": "2026-09-17T00:05:21.771421+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4275.87976,
+      "pullback_zone": 4256.66113,
+      "confirmed": false,
+      "is_choch": false,
+      "displacement_hit": false
+    },
     "bias": "bullish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4275.87976,
+        4256.66113,
+        142
+      ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-17T00:05:21.771421+00:00"
+      "fetched_at": "2026-09-17T00:21:06.624571+00:00"
     }
   }
 }
