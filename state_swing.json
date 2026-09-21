@@ -15,8 +15,8 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": "bullish",
-      "fetched_at": "2026-09-21T05:45:25.327886+00:00"
+      "bias": null,
+      "fetched_at": "2026-09-21T09:40:24.778440+00:00"
     },
     "setup": null,
     "bias": "bullish",
