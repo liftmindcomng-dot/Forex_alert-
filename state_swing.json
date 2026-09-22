@@ -63,7 +63,7 @@
         "bot": 4344.40896,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -79,7 +79,7 @@
         "bot": 4337.58826,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       }
     ]
