@@ -36,7 +36,7 @@ jobs:
           REJECTION_WICK_RATIO: "0.5"    # left as-is — script still ignores this value (unwired), see notes
           LIQUIDITY_LOOKBACK: "20"
           DISPLACEMENT_ATR_MULT: "1.0"
-          SR_MIN_TOUCHES: "2"
+          SR_MIN_TOUCHES: "0"
           SR_TOUCH_TOLERANCE_ATR_MULT: "0.25"
           SD_CONSOLIDATION_BARS: "3"
           SD_MOVE_ATR_MULT: "1.5"
