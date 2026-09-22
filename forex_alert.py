@@ -27,6 +27,14 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
     hold-duration class (day / day_swing / swing), which in turn selects
     which single hold-time threshold applies to it.
 
+    If every persisted zone for the current bias has been mitigated
+    (price closed fully through it) but the underlying structure break
+    is still valid, zones are re-derived immediately against the
+    current break rather than waiting for the next natural
+    STRUCTURE_CACHE_MINUTES refresh — see the "re-derive" block inside
+    process_pair. This costs one extra Twelve Data call, only on runs
+    where zones come back empty.
+
     RETEST     (ENTRY_MODE=retest): breakout + retest — price must come
     back and touch the exact broken 15M level, then close back beyond
     it in the trend direction (rejection at the level).
@@ -79,7 +87,9 @@ STRUCTURE_CACHE_MINUTES. This is what makes a 5-minute cron viable on
 Twelve Data's free tier (8 req/min, 800/day), but only for a small
 number of pairs — 4 pairs x 2 workflows still won't fit even with
 caching, since the 5M fetch alone is a hard floor. Keep FX_PAIRS short
-per workflow if running on a 5-min schedule.
+per workflow if running on a 5-min schedule. The zone re-derive path
+(structure mode only, only on empty-zone runs) adds up to one more
+call, so watch quota if it fires often.
 """
 
 import json
@@ -1235,6 +1245,35 @@ def process_pair(pair, state):
         # whichever persisted zones for this bias are still active.
         update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1])
         active_zones = active_zones_for(pair_state, bias)
+
+        if not active_zones:
+            # All persisted zones for this bias have been mitigated. Rather
+            # than waiting up to STRUCTURE_CACHE_MINUTES for the next
+            # natural refresh, re-derive candidates right now against the
+            # current break so a still-valid setup isn't stuck signal-less.
+            times_s2, opens_s2, highs_s2, lows_s2, closes_s2 = fetch_series(pair, TF_STRUCTURE, outputsize=150)
+            time.sleep(API_CALL_SLEEP)
+            atr_s2 = atr(highs_s2, lows_s2, closes_s2, 14)
+            bos2 = check_structure_break(
+                highs_s2, lows_s2, closes_s2, bias,
+                displacement_atr_mult=DISPLACEMENT_ATR_MULT, atr_val=atr_s2,
+            )
+            if bos2:
+                _, _, bos_index2 = bos2
+                fresh_zones = find_order_blocks(
+                    opens_s2, highs_s2, lows_s2, closes_s2, bias, bos_index2, OB_LOOKBACK, OB_MAX_ZONES)
+                if len(fresh_zones) < OB_MAX_ZONES:
+                    sd_zone = find_supply_demand_zone(
+                        opens_s2, highs_s2, lows_s2, closes_s2, bias, bos_index2, atr_s2,
+                        SD_CONSOLIDATION_BARS, SD_MOVE_ATR_MULT)
+                    if sd_zone:
+                        fresh_zones.append(sd_zone)
+                if fresh_zones:
+                    sync_order_blocks(pair_state, bias, fresh_zones, False, OB_MAX_ZONES)
+                    update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1])
+                    active_zones = active_zones_for(pair_state, bias)
+                    print(f"[{pair}] Re-derived {len(fresh_zones)} fresh zone(s) after mitigation.")
+
         if not active_zones:
             print(f"[{pair}] No active order-block/zone remaining for this bias — skipping.")
             confirmation = None
@@ -1342,7 +1381,7 @@ def process_pair(pair, state):
 
     if AUTO_TRADE_ENABLED:
         filled, detail = place_demo_order(pair, signal, sl, tps[0])
-        status = "✅ Demo order placed" if filled else "⚠️ Demo order NOT placed"
+        status = "✅ Demo order placed" if filled else "⚠ Demo order NOT placed"
         send_telegram(f"{status} — {pair}\n{detail}\n(Only TP1 is set on the order — TP2-TP{len(tps)} must be managed manually.)")
         print(f"Demo trade [{pair}]: {status} — {detail}")
 
