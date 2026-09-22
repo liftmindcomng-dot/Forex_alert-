@@ -46,33 +46,13 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4338.55337,
-        4353.12554,
-        142
-      ],
-      "zones": [
-        {
-          "high": 4352.36769,
-          "low": 4344.40896,
-          "type": "order_block"
-        },
-        {
-          "high": 4347.85365,
-          "low": 4338.12973,
-          "type": "order_block"
-        },
-        {
-          "high": 4354.45243,
-          "low": 4337.58826,
-          "type": "order_block"
-        }
-      ],
+      "bos": null,
+      "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
+      "displacement_hit": false,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-22T05:35:21.833478+00:00"
+      "fetched_at": "2026-09-22T06:25:24.549584+00:00"
     },
     "order_blocks": [
       {
