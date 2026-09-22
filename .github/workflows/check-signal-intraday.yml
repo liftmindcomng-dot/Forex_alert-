@@ -37,8 +37,8 @@ jobs:
           SWING_LOOKBACK: "2"
           SL_BUFFER_ATR_MULT: "0.15"
           ENTRY_MODE: "retest_or_pullback"  # breakout+retest OR pullback — either confirms
-          RETEST_TOLERANCE_ATR_MULT: "0.3"
-          SWING_ENTRY_MODE: "false"         # pullback fallback uses shallow (first valid) pullback, not deep retrace
+          RETEST_TOLERANCE_ATR_MULT: "0.2"
+          SWING_ENTRY_MODE: "true"         # pullback fallback uses shallow (first valid) pullback, not deep retrace
           TP_MULTIPLES: "1,2,3,4,5"
           DAY_MAX_HOLD_HOURS: "24"
           DAY_SWING_MAX_HOLD_HOURS: "72"
