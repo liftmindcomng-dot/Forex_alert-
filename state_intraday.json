@@ -35,14 +35,14 @@
       "bos": [
         4340.41174,
         4355.77888,
-        145
+        144
       ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-22T04:10:28.805930+00:00"
+      "fetched_at": "2026-09-22T04:25:24.887134+00:00"
     }
   }
 }
