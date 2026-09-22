@@ -51,6 +51,14 @@ pullback) don't compute a conviction score, so they default to the
 "day" threshold. This is a reminder based on wall-clock time since the
 alert, not a real position-aware time stop.
 
+Also sends a separate "Market Update" narrative post (matching the
+📌 MARKET UPDATE / 🔥 TRADING PLAN style used by public gold/forex
+channels) whenever a fresh structure break fires on TF_STRUCTURE. It
+describes where price sits relative to the nearest liquidity zone and
+what a sweep + rejection there would imply — it is NOT a trade signal,
+just a structure-context post, and is independent of ENTRY_MODE and of
+whether a 5M entry ever confirms. Toggle with MARKET_UPDATE_ENABLED.
+
 Optionally places a demo MT5 order via MetaApi using SL + TP1 only
 (MT5 orders carry a single TP field — TP2/TP3 must be managed manually,
 e.g. partial closes or manual trailing).
@@ -186,6 +194,22 @@ SWING_RETRACE_MAX = float(os.environ.get("SWING_RETRACE_MAX", "0.79"))
 STRATEGY_LABEL = os.environ.get("STRATEGY_LABEL", "")
 STATE_FILENAME = os.environ.get("STATE_FILENAME", "state.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), STATE_FILENAME)
+
+# ---- Market Update posts — a narrative structure-context message (the
+# "📌 MARKET UPDATE / 🔥 TRADING PLAN" style used by public gold/forex
+# channels), separate from the BUY/SELL trade alerts above. Fires once
+# per fresh structure break (BOS/CHoCH) on TF_STRUCTURE, independent of
+# ENTRY_MODE and of whether a 5M entry ever confirms. Not a trade
+# signal — no entry/SL/TP, just "here's where price sits vs. the nearest
+# liquidity zone and what a sweep+rejection there would imply." ----
+MARKET_UPDATE_ENABLED = os.environ.get("MARKET_UPDATE_ENABLED", "true").lower() == "true"
+MARKET_UPDATE_LABEL = os.environ.get("MARKET_UPDATE_LABEL", STRATEGY_LABEL or "Market")
+MARKET_UPDATE_TF_LABEL = os.environ.get("MARKET_UPDATE_TF_LABEL", TF_STRUCTURE.upper())
+# Low/high ATR multiples off the liquidity zone used to project the
+# "could recover/drop toward X-Y" target range in the narrative.
+MARKET_UPDATE_TARGET_ATR_MULTIPLES = tuple(
+    float(x) for x in os.environ.get("MARKET_UPDATE_TARGET_ATR_MULTIPLES", "1.5,4.5").split(",") if x.strip()
+)
 
 # ---- hold-time nudges (any subset can be set; unset class = disabled for
 # that class only). For ENTRY_MODE=structure, the class used is the
@@ -519,6 +543,72 @@ def liquidity_swept_before_break(pools, bias, bos_index, lookback_bars):
             continue
         return True
     return False
+
+
+def structure_sequence_label(swings):
+    """Human-readable trailing swing sequence for the market-update
+    narrative, e.g. 'Lower Highs, Lower Lows' or 'Higher Highs'."""
+    highs = last_two(swings, "high")
+    lows = last_two(swings, "low")
+    parts = []
+    if highs:
+        parts.append("Lower Highs" if highs[-1]["price"] < highs[-2]["price"] else "Higher Highs")
+    if lows:
+        parts.append("Lower Lows" if lows[-1]["price"] < lows[-2]["price"] else "Higher Lows")
+    return ", ".join(parts) if parts else "no clear swing sequence"
+
+
+def nearest_liquidity_level(pools, swings, bias, fallback_price):
+    """Liquidity zone price for the market-update narrative: the most
+    recent equal-highs/lows pool on the side price is approaching (the
+    side opposite the trend — that's what a continuation move is heading
+    toward to sweep), or the latest swing point on that side if no
+    clustered pool exists."""
+    side = "low" if bias == "bearish" else "high"
+    side_pools = [p for p in pools if p["kind"] == side]
+    if side_pools:
+        return max(side_pools, key=lambda p: p["last_i"])["price"]
+    matching = [s for s in swings if s["kind"] == side]
+    if matching:
+        return matching[-1]["price"]
+    return fallback_price
+
+
+def build_market_update_message(pair, bias, structure_seq, displacement_hit,
+                                 liquidity_zone, atr_val, decimals):
+    """Narrative-style structure summary in the '📌 MARKET UPDATE / 🔥
+    TRADING PLAN' format used by public gold/forex channels — separate
+    from the BUY/SELL trade alert. Describes where price sits relative
+    to the nearest liquidity zone and what a sweep + rejection there
+    would imply, rather than a specific entry/SL/TP."""
+    bos_word = "bearish BOS" if bias == "bearish" else "bullish BOS"
+    disp_word = f"clear {bias} displacement" if displacement_hit else f"a mild {bias} push (no strong displacement)"
+    rejection_word = "bullish rejection" if bias == "bearish" else "bearish rejection"
+    move_word = "recover toward" if bias == "bearish" else "drop toward"
+
+    lo_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[0]
+    hi_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[-1]
+    atr_val = atr_val or 0
+    if bias == "bearish":
+        target_lo = liquidity_zone + lo_mult * atr_val
+        target_hi = liquidity_zone + hi_mult * atr_val
+    else:
+        target_lo = liquidity_zone - hi_mult * atr_val
+        target_hi = liquidity_zone - lo_mult * atr_val
+
+    today = datetime.now(timezone.utc).strftime("%B %d").upper()
+    display_pair = pair.replace("/", "")
+
+    return (
+        f"📌 MARKET UPDATE – {today}\n\n"
+        f"{MARKET_UPDATE_LABEL}\n\n"
+        f"— {display_pair} / {MARKET_UPDATE_TF_LABEL} —\n\n"
+        f"🔥 TRADING PLAN – STRUCTURE UPDATE\n\n"
+        f"{display_pair} is testing the liquidity zone around {liquidity_zone:.{decimals}f} "
+        f"after a sequence of {structure_seq}, {bos_word}, and {disp_word}. "
+        f"If a liquidity sweep occurs with {rejection_word}, price could {move_word} "
+        f"{target_lo:.{decimals}f}–{target_hi:.{decimals}f}."
+    )
 
 
 def count_level_touches(highs, lows, level, tolerance, lookback_bars, before_index):
@@ -1002,6 +1092,9 @@ def process_pair(pair, state):
         liquidity_ok = structure_cache.get("liquidity_ok", True)
         sr_ok = structure_cache.get("sr_ok", True)
         displacement_hit = structure_cache.get("displacement_hit", False)
+        atr_s = structure_cache.get("atr")
+        structure_seq = structure_cache.get("structure_seq", "no clear swing sequence")
+        liquidity_zone = structure_cache.get("liquidity_zone")
     else:
         times_s, opens_s, highs_s, lows_s, closes_s = fetch_series(pair, TF_STRUCTURE, outputsize=150)
         time.sleep(API_CALL_SLEEP)
@@ -1015,6 +1108,16 @@ def process_pair(pair, state):
         displacement_hit = (
             bool(atr_s) and (highs_s[-1] - lows_s[-1]) >= DISPLACEMENT_ATR_MULT * atr_s
         ) if bos else False
+
+        # Swings + liquidity pools on the structure timeframe — computed
+        # once here regardless of ENTRY_MODE, both for the structure-mode
+        # liquidity-sweep check below and for the market-update narrative.
+        swings_s = find_swings(highs_s, lows_s, SWING_LOOKBACK)
+        tol_for_pools = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s if atr_s else 0
+        pools_s = find_liquidity_pools(swings_s, tol_for_pools)
+        structure_seq = structure_sequence_label(swings_s)
+        liquidity_zone = nearest_liquidity_level(pools_s, swings_s, bias, closes_s[-1])
+
         if bos and ENTRY_MODE == "structure":
             bos_level, pullback_zone, bos_index = bos
 
@@ -1028,16 +1131,12 @@ def process_pair(pair, state):
                     zones.append(sd_zone)
 
             if LIQUIDITY_LOOKBACK > 0:
-                tol = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s if atr_s else 0
-                swings_s = find_swings(highs_s, lows_s, SWING_LOOKBACK)
-                pools = find_liquidity_pools(swings_s, tol)
-                liquidity_ok = liquidity_swept_before_break(pools, bias, bos_index, LIQUIDITY_LOOKBACK)
+                liquidity_ok = liquidity_swept_before_break(pools_s, bias, bos_index, LIQUIDITY_LOOKBACK)
 
             if SR_MIN_TOUCHES > 0:
                 if zones:
                     level = zones[0]["low"] if bias == "bullish" else zones[0]["high"]
-                    tol = SR_TOUCH_TOLERANCE_ATR_MULT * atr_s if atr_s else 0
-                    touches = count_level_touches(highs_s, lows_s, level, tol, len(highs_s), bos_index)
+                    touches = count_level_touches(highs_s, lows_s, level, tol_for_pools, len(highs_s), bos_index)
                     sr_ok = touches >= SR_MIN_TOUCHES
                 else:
                     sr_ok = False
@@ -1054,6 +1153,9 @@ def process_pair(pair, state):
             "liquidity_ok": liquidity_ok,
             "sr_ok": sr_ok,
             "displacement_hit": displacement_hit,
+            "atr": atr_s,
+            "structure_seq": structure_seq,
+            "liquidity_zone": liquidity_zone,
             "bias_at_fetch": bias,
             "fetched_at": now_iso,
         }
@@ -1077,6 +1179,20 @@ def process_pair(pair, state):
                 new_setup["is_choch"] = bias_flipped
             pair_state["setup"] = new_setup
             print(f"[{pair}] {bias} {TF_STRUCTURE} structure break at {bos_level:.5f}. Watching {TF_ENTRY} for confirmation.")
+
+            # Fresh structure break -> narrative Market Update post
+            # (separate from the trade alert; not gated by ENTRY_MODE or
+            # by whether a 5M entry ever confirms).
+            if MARKET_UPDATE_ENABLED and liquidity_zone is not None:
+                decimals = 3 if "JPY" in pair else (2 if "XAU" in pair else 5)
+                update_msg = build_market_update_message(
+                    pair, bias, structure_seq, displacement_hit, liquidity_zone, atr_s, decimals,
+                )
+                try:
+                    send_telegram(update_msg)
+                    print(f"[{pair}] Market update posted.")
+                except Exception as e:
+                    print(f"[{pair}] Market update send failed: {e}")
 
     setup = pair_state.get("setup")
     state[pair] = pair_state
