@@ -19,25 +19,25 @@
       "fetched_at": "2026-09-23T08:20:24.724379+00:00"
     },
     "setup": {
-      "bos_level": 4338.55337,
-      "pullback_zone": 4353.12554,
+      "bos_level": 4333.50667,
+      "pullback_zone": 4370.1704,
       "confirmed": false,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
         {
-          "high": 4352.36769,
-          "low": 4344.40896,
+          "high": 4364.90615,
+          "low": 4358.78008,
           "type": "order_block"
         },
         {
-          "high": 4347.85365,
-          "low": 4338.12973,
+          "high": 4365.59912,
+          "low": 4359.21739,
           "type": "order_block"
         },
         {
-          "high": 4354.45243,
-          "low": 4337.58826,
+          "high": 4361.47941,
+          "low": 4354.26263,
           "type": "order_block"
         }
       ],
@@ -46,16 +46,36 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "zones": [],
+      "bos": [
+        4333.50667,
+        4370.1704,
+        140
+      ],
+      "zones": [
+        {
+          "high": 4364.90615,
+          "low": 4358.78008,
+          "type": "order_block"
+        },
+        {
+          "high": 4365.59912,
+          "low": 4359.21739,
+          "type": "order_block"
+        },
+        {
+          "high": 4361.47941,
+          "low": 4354.26263,
+          "type": "order_block"
+        }
+      ],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 12.835115959575592,
+      "displacement_hit": true,
+      "atr": 13.509487684639891,
       "structure_seq": "Lower Highs, Higher Lows",
       "liquidity_zone": 4334.258105,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-23T10:50:24.042086+00:00"
+      "fetched_at": "2026-09-23T11:45:27.915510+00:00"
     },
     "order_blocks": [
       {
@@ -82,6 +102,10 @@
         "active": true,
         "is_choch": false
       }
-    ]
+    ],
+    "last_market_update": {
+      "bias": "bearish",
+      "bos_level": 4333.50667
+    }
   }
 }
