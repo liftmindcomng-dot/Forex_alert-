@@ -220,6 +220,15 @@ MARKET_UPDATE_TF_LABEL = os.environ.get("MARKET_UPDATE_TF_LABEL", TF_STRUCTURE.u
 MARKET_UPDATE_TARGET_ATR_MULTIPLES = tuple(
     float(x) for x in os.environ.get("MARKET_UPDATE_TARGET_ATR_MULTIPLES", "1.5,4.5").split(",") if x.strip()
 )
+# Minimum distance (in ATR multiples of the structure timeframe) the new
+# bos_level must sit beyond the last *posted* Market Update's bos_level,
+# in the same bias direction, before another update is sent. Prevents
+# repeated, near-identical posts during a sustained trend where a fresh
+# swing point forms every cache refresh but represents the same ongoing
+# move rather than a meaningfully new development. A bias flip (genuine
+# reversal) always posts regardless of this threshold. Set to 0 to
+# disable and post on every new BOS/CHoCH as before.
+MARKET_UPDATE_MIN_MOVE_ATR_MULT = float(os.environ.get("MARKET_UPDATE_MIN_MOVE_ATR_MULT", "1.0"))
 
 # ---- hold-time nudges (any subset can be set; unset class = disabled for
 # that class only). For ENTRY_MODE=structure, the class used is the
@@ -1005,10 +1014,18 @@ def generate_market_update_chart(pair, times, opens, highs, lows, closes, bias,
                                   swings, bos_index, bos_level, is_choch,
                                   liquidity_zone, atr_val, target_lo, target_hi,
                                   num_candles=60):
-    """Annotated SMC-style chart for the Market Update post: swing
-    high/low labels, the BOS/CHoCH break line, a liquidity re-sweep zone
-    box, and a projected reversal path with target callouts — matching
-    the public gold-channel chart style."""
+    """Annotated SMC-style chart for the Market Update post, rendered on
+    mplfinance's candlestick engine (real date-axis ticks, proper OHLC
+    styling) rather than hand-drawn Rectangle candles. All annotations —
+    swing labels, BOS/CHoCH line, liquidity zone box, projected path +
+    target callouts — are still driven entirely by this script's own SMC
+    computation (find_swings / check_structure_break / liquidity zone),
+    not by anything mplfinance infers on its own.
+
+    Requires the `mplfinance` and `pandas` packages (add both to the
+    workflow's pip install step alongside matplotlib/requests)."""
+    import mplfinance as mpf
+    import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1017,20 +1034,40 @@ def generate_market_update_chart(pair, times, opens, highs, lows, closes, bias,
     start = max(0, n - num_candles)
     count = n - start
 
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=120)
-    ax.set_facecolor("#eaf7fb")
-    fig.patch.set_facecolor("#eaf7fb")
+    df = pd.DataFrame({
+        "Open": opens[start:n],
+        "High": highs[start:n],
+        "Low": lows[start:n],
+        "Close": closes[start:n],
+    }, index=pd.to_datetime(times[start:n]))
 
-    for i in range(start, n):
-        x = i - start
-        up = closes[i] >= opens[i]
-        color = "#26a69a" if up else "#ef5350"
-        ax.plot([x, x], [lows[i], highs[i]], color=color, linewidth=1)
-        body_low, body_high = min(opens[i], closes[i]), max(opens[i], closes[i])
-        height = max(body_high - body_low, (highs[i] - lows[i]) * 0.02 or 0.00001)
-        ax.add_patch(plt.Rectangle((x - 0.3, body_low), 0.6, height, color=color))
+    mc = mpf.make_marketcolors(up="#26a69a", down="#ef5350", edge="inherit", wick="inherit")
+    style = mpf.make_mpf_style(
+        marketcolors=mc,
+        gridstyle=":",
+        gridcolor="#b0bec5",
+        facecolor="#eaf7fb",
+        figcolor="#eaf7fb",
+        y_on_right=True,
+    )
 
-    # --- swing high/low labels, only within the visible window ---
+    fig, axes = mpf.plot(
+        df,
+        type="candle",
+        style=style,
+        title=f"{pair} — Market Structure Update ({bias})",
+        ylabel="Price",
+        volume=False,
+        figsize=(10, 6),
+        returnfig=True,
+    )
+    ax = axes[0]
+
+    # mplfinance draws candles at integer x-positions 0..count-1
+    # regardless of the datetime index (it only uses the index for the
+    # tick-label text) — so the 0-based indices from find_swings /
+    # check_structure_break line up directly with no conversion.
+
     trend_word = "Higher" if bias == "bullish" else "Lower"
     for s in swings:
         if s["i"] < start:
@@ -1039,22 +1076,19 @@ def generate_market_update_chart(pair, times, opens, highs, lows, closes, bias,
         label = f"{trend_word} {'High' if s['kind'] == 'high' else 'Low'}"
         draw_swing_label(ax, x, s["price"], label, above=(s["kind"] == "high"))
 
-    # --- BOS/CHoCH break line ---
     if bos_index is not None and bos_index >= start:
         label = "CHoCH" if is_choch else "BOS"
         draw_break_marker(ax, bos_index - start, bos_level, count - 1, label,
                            color="#d500f9" if is_choch else "#111")
 
-    # --- liquidity re-sweep zone box, sized off ATR around the liquidity level ---
     if liquidity_zone is not None and atr_val:
         zone_half = 0.4 * atr_val
         draw_zone_rect(ax, 0, count - 1, liquidity_zone - zone_half, liquidity_zone + zone_half,
                         color="#ef535025")
         ax.annotate("Potential Liquidity Re-Sweep Zone",
                     xy=(count * 0.35, liquidity_zone), fontsize=8, color="#c62828",
-                    ha="center", va="bottom")
+                    ha="center", va="bottom", clip_on=False)
 
-    # --- projected reversal path + target callouts ---
     last_x, last_price = count - 1, closes[-1]
     mid_x = count - 1 + count * 0.15
     end_x = count - 1 + count * 0.3
@@ -1063,20 +1097,15 @@ def generate_market_update_chart(pair, times, opens, highs, lows, closes, bias,
     draw_target_box(ax, end_x, target_hi, f"{target_hi:,.2f}", bg_color="#1b9e4b")
     draw_target_box(ax, mid_x, liquidity_zone, f"{liquidity_zone:,.2f}", bg_color="#1b9e4b")
 
-    ax.set_title(f"{pair} — Market Structure Update ({bias})", fontsize=11)
     ax.set_xlim(-1, end_x + 6)
 
     # Widen the y-range so the projected path + target boxes (which can
-    # sit above/below the candle range) are actually visible rather than
-    # relying on clip_on=False to draw into blank margin. Pad by the
-    # larger of a fixed fraction of the candle range or the actual
-    # distance out to the furthest target/liquidity point.
+    # sit above/below the candle range) are actually visible.
     price_lo = min(min(lows[start:n]), liquidity_zone, target_lo, target_hi)
     price_hi = max(max(highs[start:n]), liquidity_zone, target_lo, target_hi)
     pad = (price_hi - price_lo) * 0.1 or 1.0
     ax.set_ylim(price_lo - pad, price_hi + pad)
 
-    ax.set_xticks([])
     fig.tight_layout()
 
     safe_pair = pair.replace("/", "")
@@ -1342,8 +1371,26 @@ def process_pair(pair, state):
 
             # Fresh structure break -> narrative Market Update post
             # (separate from the trade alert; not gated by ENTRY_MODE or
-            # by whether a 5M entry ever confirms).
-            if MARKET_UPDATE_ENABLED and liquidity_zone is not None:
+            # by whether a 5M entry ever confirms). is_new_bos above only
+            # checks "did bos_level literally change" — during a
+            # sustained trend that fires on every fresh swing point even
+            # if it's a trivial distance past the last one. The check
+            # below adds "is this far enough to be worth another post":
+            # a bias flip always posts (a genuine reversal is inherently
+            # newsworthy); same-direction continuation only posts if the
+            # new bos_level has moved at least MARKET_UPDATE_MIN_MOVE_ATR_MULT
+            # x ATR beyond the last *posted* update's level.
+            last_update = pair_state.get("last_market_update")
+            should_post_update = True
+            if last_update and last_update.get("bias") == bias and not bias_flipped:
+                move_threshold = MARKET_UPDATE_MIN_MOVE_ATR_MULT * (atr_s or 0)
+                distance = abs(bos_level - last_update.get("bos_level", bos_level))
+                if move_threshold > 0 and distance < move_threshold:
+                    should_post_update = False
+                    print(f"[{pair}] New {bias} BOS only {distance:.5f} beyond last posted update "
+                          f"(threshold {move_threshold:.5f}) — skipping Market Update, same trend continuing.")
+
+            if MARKET_UPDATE_ENABLED and liquidity_zone is not None and should_post_update:
                 decimals = 3 if "JPY" in pair else (2 if "XAU" in pair else 5)
                 update_msg = build_market_update_message(
                     pair, bias, structure_seq, displacement_hit, liquidity_zone, atr_s, decimals,
@@ -1369,10 +1416,12 @@ def process_pair(pair, state):
                     else:
                         send_telegram(update_msg)
                     print(f"[{pair}] Market update posted.")
+                    pair_state["last_market_update"] = {"bias": bias, "bos_level": bos_level}
                 except Exception as e:
                     print(f"[{pair}] Market update chart failed ({e}) — falling back to text.")
                     try:
                         send_telegram(update_msg)
+                        pair_state["last_market_update"] = {"bias": bias, "bos_level": bos_level}
                     except Exception as e2:
                         print(f"[{pair}] Market update send failed: {e2}")
 
