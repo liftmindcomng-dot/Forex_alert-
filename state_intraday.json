@@ -21,9 +21,14 @@
     "setup": {
       "bos_level": 4308.48772,
       "pullback_zone": 4321.31388,
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
-      "displacement_hit": true
+      "displacement_hit": true,
+      "last_entry_bar_time": "2026-09-23 11:30:00",
+      "duration_class": "day_swing",
+      "condition_label": "BOS+DISP+RETEST",
+      "confirmed_at": "2026-09-23T11:35:38.818485+00:00",
+      "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
