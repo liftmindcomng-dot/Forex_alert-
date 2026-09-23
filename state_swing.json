@@ -59,27 +59,27 @@
     },
     "order_blocks": [
       {
-        "top": 4352.36769,
-        "bot": 4344.40896,
+        "top": 4364.90615,
+        "bot": 4358.78008,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       },
       {
-        "top": 4347.85365,
-        "bot": 4338.12973,
+        "top": 4365.59912,
+        "bot": 4359.21739,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       },
       {
-        "top": 4354.45243,
-        "bot": 4337.58826,
+        "top": 4361.47941,
+        "bot": 4354.26263,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       }
     ]
