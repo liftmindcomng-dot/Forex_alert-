@@ -7,29 +7,19 @@ state file and no "only on fresh break" gating (see the workflow's cron:
 it fires every run, on purpose, for a steady drumbeat of updates rather
 than a rarer event-driven post).
 
-Originally built on yfinance (GC=F / COMEX gold futures) with shallow
-2-swing structure detection. Now upgraded to:
+Feed: Twelve Data's XAU/USD SPOT feed (TWELVE_DATA_API_KEY), matching
+forex_alert.py's price source exactly.
 
-  - Twelve Data's XAU/USD SPOT feed (TWELVE_DATA_API_KEY), matching
-    forex_alert.py's price source exactly, instead of yfinance futures
-    data — no more premium/discount drift between the two systems.
-  - Real BOS vs CHoCH distinction: a break is CHoCH if it reverses the
-    prevailing multi-swing trend, BOS if it continues it (same concept
-    as forex_alert.py's check_structure_break, adapted to run without a
-    persisted state file — see analyze_structure_deep for how prior
-    trend is inferred from a longer swing lookback within the same
-    fetch, since there's no cross-run memory here).
-  - Order block detection: the last opposite-colored candle before the
-    impulsive breakout leg, drawn as a real, data-positioned zone box
-    (this also fixes the old hardcoded liquidity-label position as a
-    side effect — it now sits at the actual order-block level).
-  - A displacement filter: the breaking candle's range must clear a
-    minimum ATR multiple, so a marginal poke past a swing point isn't
-    reported as a meaningful structural break.
+Structure detection: real BOS vs CHoCH distinction (a break is CHoCH if
+it reverses the prevailing multi-swing trend, BOS if it continues it),
+order block detection (last opposite-colored candle before the
+impulsive breakout leg, now supporting multiple stacked zones), and a
+displacement filter (breaking candle's range must clear a minimum ATR
+multiple).
 
-Still intentionally does NOT include: liquidity-sweep detection, S/R
-confluence, or FVG confirmation (forex_alert.py's structure mode has all
-three) — this stays a lighter, narrative-only poster, not a signal engine.
+Chart styling: bold arrow markers at swing points, multiple order-block
+zones, a current-price badge, and a computed (ATR-based, not hand-drawn)
+projection line toward a "Price range" target.
 """
 
 import os
@@ -50,7 +40,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
 PAIR = os.getenv("XAU_PAIR", "XAU/USD")
-INTERVAL = os.getenv("XAU_INTERVAL", "30min")   # Twelve Data format, e.g. "30min", "1h"
+INTERVAL = os.getenv("XAU_INTERVAL", "30min")   # Twelve Data format, e.g. "30min", "1h", "15min"
 OUTPUT_SIZE = int(os.getenv("XAU_OUTPUTSIZE", "150"))
 
 SWING_LOOKBACK = int(os.getenv("SWING_LOOKBACK", "3"))       # bars each side for a confirmed pivot
@@ -58,6 +48,7 @@ TREND_LOOKBACK_SWINGS = int(os.getenv("TREND_LOOKBACK_SWINGS", "4"))  # how many
 OB_LOOKBACK = int(os.getenv("OB_LOOKBACK", "15"))
 DISPLACEMENT_ATR_MULT = float(os.getenv("DISPLACEMENT_ATR_MULT", "1.0"))
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
+PROJECTION_ATR_MULT = float(os.getenv("PROJECTION_ATR_MULT", "2.0"))
 
 
 # ================== LIVE DATA (Twelve Data, spot XAU/USD) ==================
@@ -140,6 +131,20 @@ def find_order_block(df, bias, before_idx, lookback=OB_LOOKBACK):
     return None
 
 
+def find_order_blocks_multi(df, bias, swings, lookback=OB_LOOKBACK, max_zones=3):
+    """Walks the last few same-direction swings and finds the order block
+    preceding each one, so the chart shows a history of zones (like an
+    analyst marking several boxes along the move) instead of just the
+    single most recent one."""
+    zones = []
+    for idx in swings.tail(max_zones).index:
+        before_idx = df.index.get_loc(idx)
+        ob = find_order_block(df, bias, before_idx=before_idx, lookback=lookback)
+        if ob and ob not in zones:
+            zones.append(ob)
+    return zones
+
+
 def analyze_structure_deep(df):
     """Deeper structure read than the original 2-swing version:
       - BOS vs CHoCH: compares the latest swing break against the trend
@@ -190,9 +195,6 @@ def analyze_structure_deep(df):
     hh_prior = swings_high_all.tail(TREND_LOOKBACK_SWINGS + 1)
     ll_prior = swings_low_all.tail(TREND_LOOKBACK_SWINGS + 1)
     if len(hh_prior) >= TREND_LOOKBACK_SWINGS and len(ll_prior) >= TREND_LOOKBACK_SWINGS:
-        # compare the swing before the most recent one against the one
-        # before that, i.e. drop the latest swing and re-run the same
-        # higher-high/higher-low logic on the trailing window
         hh_excl_latest = hh_prior.iloc[:-1] if len(hh_prior) > TREND_LOOKBACK_SWINGS else hh_prior
         ll_excl_latest = ll_prior.iloc[:-1] if len(ll_prior) > TREND_LOOKBACK_SWINGS else ll_prior
         if len(hh_excl_latest) >= 2 and hh_excl_latest["Swing_High"].iloc[-1] > hh_excl_latest["Swing_High"].iloc[-2]:
@@ -209,9 +211,6 @@ def analyze_structure_deep(df):
     displacement_hit = False
 
     if bias in ("Bullish", "Bearish") and (len(swings_high) >= 1 or len(swings_low) >= 1):
-        # locate the break: latest close vs. the most recent opposite
-        # swing point in the bias direction (mirrors
-        # forex_alert.py's check_structure_break, single-pass here)
         n = len(df)
         last_close = df["Close"].iloc[-1]
         if bias == "Bullish" and len(swings_high) >= 1:
@@ -267,64 +266,80 @@ def create_chart(df, filename="xauusd_chart.png"):
         returnfig=True,
     )
     ax = axes[0]
-
-    # mplfinance plots at integer x-positions 0..len(plot_df)-1 regardless
-    # of the datetime index — offset_start converts full-df swing/break
-    # indices into positions within this trimmed plotting window.
     offset_start = len(df) - len(plot_df)
+    last_x = len(plot_df) - 1
 
+    # --- swing markers as bold arrows ---
     for idx, row in swings_high.tail(2).iterrows():
         pos = df.index.get_loc(idx) - offset_start
         if pos < 0:
             continue
-        ax.annotate("Lower High" if bias == "Bearish" else "Higher High",
-                    xy=(pos, row["Swing_High"]),
-                    xytext=(0, 12), textcoords="offset points",
-                    ha="center", color="red", fontsize=8, fontweight="bold",
-                    arrowprops=dict(arrowstyle="->", color="red"))
+        label = "Lower High" if bias == "Bearish" else "Higher High"
+        ax.annotate("", xy=(pos, row["Swing_High"]), xytext=(pos, row["Swing_High"] + (atr_val or 1) * 1.8),
+                    arrowprops=dict(arrowstyle="-|>", color="#d32f2f", lw=2))
+        ax.annotate(label, xy=(pos, row["Swing_High"] + (atr_val or 1) * 2.0),
+                    ha="center", fontsize=8, fontweight="bold", color="#d32f2f")
 
     for idx, row in swings_low.tail(2).iterrows():
         pos = df.index.get_loc(idx) - offset_start
         if pos < 0:
             continue
-        ax.annotate("Higher Low" if bias == "Bullish" else "Lower Low",
-                    xy=(pos, row["Swing_Low"]),
-                    xytext=(0, -15), textcoords="offset points",
-                    ha="center", color="green", fontsize=8, fontweight="bold",
-                    arrowprops=dict(arrowstyle="->", color="green"))
+        label = "Higher Low" if bias == "Bullish" else "Lower Low"
+        ax.annotate("", xy=(pos, row["Swing_Low"]), xytext=(pos, row["Swing_Low"] - (atr_val or 1) * 1.8),
+                    arrowprops=dict(arrowstyle="-|>", color="#2e7d32", lw=2))
+        ax.annotate(label, xy=(pos, row["Swing_Low"] - (atr_val or 1) * 2.0),
+                    ha="center", fontsize=8, fontweight="bold", color="#2e7d32")
 
-    # --- BOS/CHoCH break line, at its real level, only if one fired ---
+    # --- BOS/CHoCH line ---
     if break_kind and break_index is not None:
         bx = break_index - offset_start
         if bx >= 0:
-            ax.plot([bx, len(plot_df) - 1], [break_level, break_level],
-                    linestyle="--", linewidth=1,
-                    color="#d500f9" if break_kind == "CHoCH" else "#111", alpha=0.7)
-            ax.annotate(break_kind, xy=(bx, break_level), fontsize=9, fontweight="bold",
-                        color="#d500f9" if break_kind == "CHoCH" else "#111",
-                        ha="center", va="bottom")
+            col = "#d500f9" if break_kind == "CHoCH" else "#111"
+            ax.plot([bx, last_x], [break_level, break_level], linestyle="--", linewidth=1, color=col, alpha=0.8)
+            ax.annotate(break_kind, xy=((bx + last_x) / 2, break_level), fontsize=9, fontweight="bold",
+                        color=col, ha="center", va="bottom")
 
-    # --- order-block zone, drawn at its real computed level (fixes the
-    # old fixed-position "Potential Liquidity Re-Sweep Zone" label) ---
-    if order_block:
-        rect = plt.Rectangle(
-            (0, order_block["low"]), len(plot_df) - 1, order_block["high"] - order_block["low"],
-            facecolor="#ef535025" if bias == "Bearish" else "#26a69a25", edgecolor="none", zorder=1,
-        )
+    # --- multiple order-block zones ---
+    swings_for_ob = swings_low if bias == "Bullish" else swings_high
+    zones = find_order_blocks_multi(df, bias, swings_for_ob, lookback=OB_LOOKBACK, max_zones=3)
+    zone_color = "#26a69a" if bias == "Bullish" else "#ef5350"
+    for i, ob in enumerate(zones):
+        rect = plt.Rectangle((0, ob["low"]), last_x, ob["high"] - ob["low"],
+                              facecolor=zone_color + "22", edgecolor=zone_color, linewidth=0.8, zorder=1)
         ax.add_patch(rect)
-        ax.annotate("Order Block / Potential Re-Sweep Zone",
-                    xy=(len(plot_df) * 0.35, (order_block["high"] + order_block["low"]) / 2),
-                    color="red" if bias == "Bearish" else "green", fontsize=8, fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
-                              edgecolor="red" if bias == "Bearish" else "green", alpha=0.9))
+        if i == 0:
+            ax.annotate("Order Block / Re-Sweep Zone", xy=(last_x * 0.15, (ob["high"] + ob["low"]) / 2),
+                        color=zone_color, fontsize=8, fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=zone_color, alpha=0.9))
+
+    # --- current price badge ---
+    last_price = df["Close"].iloc[-1]
+    badge_color = "#26a69a" if bias == "Bullish" else "#ef5350"
+    ax.annotate(f"{last_price:,.2f}", xy=(last_x, last_price), xytext=(12, 0), textcoords="offset points",
+                fontsize=10, fontweight="bold", color="white", va="center",
+                bbox=dict(boxstyle="round,pad=0.4", facecolor=badge_color, edgecolor="none"))
+
+    # --- ATR-based projected target (computed, not hand-drawn) ---
+    target = None
+    if atr_val:
+        direction = 1 if bias == "Bullish" else -1
+        target = last_price + direction * PROJECTION_ATR_MULT * atr_val
+        mid_x = last_x + (len(plot_df) * 0.15)
+        end_x = last_x + (len(plot_df) * 0.3)
+        pullback = last_price - direction * atr_val * 0.5
+        ax.plot([last_x, mid_x, end_x], [last_price, pullback, target],
+                linestyle="--", linewidth=1.2, color="#616161", alpha=0.8)
+        ax.annotate("Price range", xy=(end_x, target), xytext=(6, 0), textcoords="offset points",
+                    fontsize=8, fontweight="bold", color="#424242")
+        ax.set_xlim(right=end_x + 3)
 
     plt.savefig(filename, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
-    return filename, structure_notes, bias, break_kind, displacement_hit
+    return filename, structure_notes, bias, break_kind, displacement_hit, order_block, target
 
 
 # ================== MESSAGE ==================
-def create_message(price, structure_notes, bias, break_kind, displacement_hit):
+def create_message(price, structure_notes, bias, break_kind, displacement_hit, order_block, target):
     date_str = datetime.now().strftime("%B %d").upper()
     notes_text = "\n".join([f"• {note}" for note in structure_notes]) if structure_notes else "• Structure developing"
 
@@ -332,6 +347,16 @@ def create_message(price, structure_notes, bias, break_kind, displacement_hit):
     if break_kind:
         disp_word = "with clear displacement" if displacement_hit else "without strong displacement"
         break_line = f"\n<b>{break_kind}</b> confirmed {disp_word} on {PAIR.replace('/', '')} {INTERVAL.upper()}.\n"
+
+    if order_block:
+        zone_line = (
+            "Price is approaching a live order-block / re-sweep zone "
+            f"({order_block['low']:,.2f} – {order_block['high']:,.2f}).\n"
+        )
+    else:
+        zone_line = "No active order-block zone currently in play — structure is still developing.\n"
+
+    target_line = f"\nProjected range target (ATR-based): <b>{target:,.2f}</b>\n" if target else ""
 
     message = f"""XAUUSD {INTERVAL.upper()} Setup — Intraday
 
@@ -346,9 +371,7 @@ XAUUSD is trading around <b>{price:,.2f}</b>.
 <b>Structure:</b>
 {notes_text}
 
-Price is approaching a potential order-block / re-sweep zone.
-If a liquidity sweep occurs with strong rejection, we can look for a move toward the next price range.
-
+{zone_line}{target_line}
 <b>Bias:</b> {bias} — Wait for reaction at the zone.
 """
     return message
@@ -373,8 +396,8 @@ def send_telegram_photo(photo_path, caption):
 if __name__ == "__main__":
     try:
         df, price = get_live_data()
-        chart_file, notes, bias, break_kind, displacement_hit = create_chart(df)
-        caption = create_message(price, notes, bias, break_kind, displacement_hit)
+        chart_file, notes, bias, break_kind, displacement_hit, order_block, target = create_chart(df)
+        caption = create_message(price, notes, bias, break_kind, displacement_hit, order_block, target)
         result = send_telegram_photo(chart_file, caption)
 
         if result.get("ok"):
