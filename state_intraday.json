@@ -19,33 +19,37 @@
       "fetched_at": "2026-09-23T12:10:24.199665+00:00"
     },
     "setup": {
-      "bos_level": 4308.48772,
-      "pullback_zone": 4321.31388,
+      "bos_level": 4294.76772,
+      "pullback_zone": 4319.46784,
       "confirmed": true,
       "is_choch": false,
       "displacement_hit": true,
-      "last_entry_bar_time": "2026-09-23 11:30:00",
+      "last_entry_bar_time": "2026-09-23 13:40:00",
       "duration_class": "day_swing",
-      "condition_label": "BOS+DISP+RETEST",
-      "confirmed_at": "2026-09-23T11:35:38.818485+00:00",
+      "condition_label": "BOS+DISP+PULLBACK",
+      "confirmed_at": "2026-09-23T13:45:43.159976+00:00",
       "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
+      "bos": [
+        4294.76772,
+        4319.46784,
+        141
+      ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 7.546550930002623,
+      "displacement_hit": true,
+      "atr": 8.7286365194347,
       "structure_seq": "Lower Highs, Lower Lows",
-      "liquidity_zone": 4309.32338,
+      "liquidity_zone": 4315.598096666667,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-23T13:30:22.161854+00:00"
+      "fetched_at": "2026-09-23T13:45:24.402088+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
-      "bos_level": 4308.48772
+      "bos_level": 4294.76772
     }
   }
 }
