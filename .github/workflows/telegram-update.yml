@@ -2,28 +2,28 @@ name: XAUUSD Market Update
 
 on:
   schedule:
-    - cron: '0 * * * *'   # Every hour
-  workflow_dispatch:       # Manual run button
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
 
 jobs:
-  send-update:
+  post-update:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install requests yfinance mplfinance pandas numpy matplotlib
+          pip install pandas numpy mplfinance matplotlib requests
 
-      - name: Run the script
+      - name: Run XAUUSD market update
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python xauusd_update.py
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: python xauusd_market_update.py
