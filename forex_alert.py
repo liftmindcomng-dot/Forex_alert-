@@ -894,10 +894,67 @@ def send_telegram(text):
         resp.read()
 
 
-def generate_chart(pair, opens, highs, lows, closes, bias, signal, entry, sl, tps, num_candles=40):
+def draw_zone_rect(ax, x_start, x_end, y_low, y_high, color="#ef535030", edge_color=None):
+    """Shaded rectangle for an order block / supply-demand / liquidity zone."""
+    import matplotlib.pyplot as plt
+    height = y_high - y_low
+    rect = plt.Rectangle((x_start, y_low), x_end - x_start, height,
+                          facecolor=color, edgecolor=edge_color or "none",
+                          linewidth=1, zorder=1)
+    ax.add_patch(rect)
+
+
+def draw_swing_label(ax, x, y, text, above=True, color="#111"):
+    """Small text label at a swing point, e.g. 'Lower High' / 'Higher Low'.
+    Offset is in screen points (not price units) so it stays a small,
+    fixed visual distance from the point regardless of price scale."""
+    offset_points = (0, 8) if above else (0, -8)
+    ax.annotate(text, xy=(x, y), xycoords="data",
+                xytext=offset_points, textcoords="offset points",
+                fontsize=8, color=color, ha="center",
+                va="bottom" if above else "top", clip_on=False)
+
+
+def draw_break_marker(ax, x_break, level, x_end, label, color="#111"):
+    """Dashed horizontal level line + BOS/CHoCH text tag at the break point."""
+    ax.plot([x_break, x_end], [level, level], linestyle="--", linewidth=1,
+            color=color, alpha=0.6, zorder=2)
+    ax.annotate(label, xy=(x_break, level), xytext=(x_break, level),
+                fontsize=8, color=color, ha="center", va="bottom")
+
+
+def draw_target_box(ax, x, y, text, bg_color="#1b9e4b"):
+    """Rounded price-callout box, like the green target boxes in SMC charts.
+    clip_on=False so it still renders even if it falls outside the
+    auto-scaled candle range (targets/liquidity levels often do)."""
+    ax.annotate(
+        text, xy=(x, y), fontsize=9, color="white", ha="center", va="center",
+        bbox=dict(boxstyle="round,pad=0.35", fc=bg_color, ec="none"),
+        zorder=5, clip_on=False, annotation_clip=False,
+    )
+
+
+def draw_direction_arrow(ax, x_start, y_start, x_end, y_end, color="#111"):
+    """Projected price-path arrow (the zig-zag reversal arrow in the
+    reference chart). annotation_clip=False so the arrow still draws
+    even when its endpoint sits outside the candle-derived y-range."""
+    ax.annotate(
+        "", xy=(x_end, y_end), xytext=(x_start, y_start),
+        arrowprops=dict(arrowstyle="->", color=color, linewidth=1.3, shrinkA=0, shrinkB=0),
+        zorder=4, annotation_clip=False,
+    )
+
+
+def generate_chart(pair, opens, highs, lows, closes, bias, signal, entry, sl, tps,
+                    num_candles=40, zone=None, break_info=None):
     """Candlestick chart of the last `num_candles` entry-timeframe bars,
     with entry/SL/TP levels drawn as horizontal lines. Requires
-    matplotlib (imported lazily so it's only needed when charts are on)."""
+    matplotlib (imported lazily so it's only needed when charts are on).
+
+    Optional `zone` = {"low": ..., "high": ...} draws the order-block /
+    zone the entry triggered from as a shaded rectangle. Optional
+    `break_info` = {"x": <candle index in this window>, "level": ...,
+    "label": "BOS"/"CHoCH"} draws the structure-break line."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -916,6 +973,14 @@ def generate_chart(pair, opens, highs, lows, closes, bias, signal, entry, sl, tp
         height = max(body_high - body_low, (highs[i] - lows[i]) * 0.02 or 0.00001)
         ax.add_patch(plt.Rectangle((x - 0.3, body_low), 0.6, height, color=color))
 
+    if zone:
+        draw_zone_rect(ax, 0, count - 1, zone["low"], zone["high"],
+                        color="#ef535030" if bias == "bearish" else "#26a69a30")
+
+    if break_info:
+        draw_break_marker(ax, break_info["x"], break_info["level"], count - 1,
+                           break_info["label"])
+
     ax.axhline(entry, color="#2962ff", linestyle="--", linewidth=1)
     ax.text(count - 1, entry, " Entry", va="center", fontsize=7, color="#2962ff")
     ax.axhline(sl, color="#d500f9", linestyle="--", linewidth=1)
@@ -931,6 +996,91 @@ def generate_chart(pair, opens, highs, lows, closes, bias, signal, entry, sl, tp
 
     safe_pair = pair.replace("/", "")
     path = f"/tmp/chart_{safe_pair}_{int(time.time())}.png"
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def generate_market_update_chart(pair, times, opens, highs, lows, closes, bias,
+                                  swings, bos_index, bos_level, is_choch,
+                                  liquidity_zone, atr_val, target_lo, target_hi,
+                                  num_candles=60):
+    """Annotated SMC-style chart for the Market Update post: swing
+    high/low labels, the BOS/CHoCH break line, a liquidity re-sweep zone
+    box, and a projected reversal path with target callouts — matching
+    the public gold-channel chart style."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(closes)
+    start = max(0, n - num_candles)
+    count = n - start
+
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=120)
+    ax.set_facecolor("#eaf7fb")
+    fig.patch.set_facecolor("#eaf7fb")
+
+    for i in range(start, n):
+        x = i - start
+        up = closes[i] >= opens[i]
+        color = "#26a69a" if up else "#ef5350"
+        ax.plot([x, x], [lows[i], highs[i]], color=color, linewidth=1)
+        body_low, body_high = min(opens[i], closes[i]), max(opens[i], closes[i])
+        height = max(body_high - body_low, (highs[i] - lows[i]) * 0.02 or 0.00001)
+        ax.add_patch(plt.Rectangle((x - 0.3, body_low), 0.6, height, color=color))
+
+    # --- swing high/low labels, only within the visible window ---
+    trend_word = "Higher" if bias == "bullish" else "Lower"
+    for s in swings:
+        if s["i"] < start:
+            continue
+        x = s["i"] - start
+        label = f"{trend_word} {'High' if s['kind'] == 'high' else 'Low'}"
+        draw_swing_label(ax, x, s["price"], label, above=(s["kind"] == "high"))
+
+    # --- BOS/CHoCH break line ---
+    if bos_index is not None and bos_index >= start:
+        label = "CHoCH" if is_choch else "BOS"
+        draw_break_marker(ax, bos_index - start, bos_level, count - 1, label,
+                           color="#d500f9" if is_choch else "#111")
+
+    # --- liquidity re-sweep zone box, sized off ATR around the liquidity level ---
+    if liquidity_zone is not None and atr_val:
+        zone_half = 0.4 * atr_val
+        draw_zone_rect(ax, 0, count - 1, liquidity_zone - zone_half, liquidity_zone + zone_half,
+                        color="#ef535025")
+        ax.annotate("Potential Liquidity Re-Sweep Zone",
+                    xy=(count * 0.35, liquidity_zone), fontsize=8, color="#c62828",
+                    ha="center", va="bottom")
+
+    # --- projected reversal path + target callouts ---
+    last_x, last_price = count - 1, closes[-1]
+    mid_x = count - 1 + count * 0.15
+    end_x = count - 1 + count * 0.3
+    draw_direction_arrow(ax, last_x, last_price, mid_x, liquidity_zone)
+    draw_direction_arrow(ax, mid_x, liquidity_zone, end_x, target_hi)
+    draw_target_box(ax, end_x, target_hi, f"{target_hi:,.2f}", bg_color="#1b9e4b")
+    draw_target_box(ax, mid_x, liquidity_zone, f"{liquidity_zone:,.2f}", bg_color="#1b9e4b")
+
+    ax.set_title(f"{pair} — Market Structure Update ({bias})", fontsize=11)
+    ax.set_xlim(-1, end_x + 6)
+
+    # Widen the y-range so the projected path + target boxes (which can
+    # sit above/below the candle range) are actually visible rather than
+    # relying on clip_on=False to draw into blank margin. Pad by the
+    # larger of a fixed fraction of the candle range or the actual
+    # distance out to the furthest target/liquidity point.
+    price_lo = min(min(lows[start:n]), liquidity_zone, target_lo, target_hi)
+    price_hi = max(max(highs[start:n]), liquidity_zone, target_lo, target_hi)
+    pad = (price_hi - price_lo) * 0.1 or 1.0
+    ax.set_ylim(price_lo - pad, price_hi + pad)
+
+    ax.set_xticks([])
+    fig.tight_layout()
+
+    safe_pair = pair.replace("/", "")
+    path = f"/tmp/marketupdate_{safe_pair}_{int(time.time())}.png"
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -1198,11 +1348,33 @@ def process_pair(pair, state):
                 update_msg = build_market_update_message(
                     pair, bias, structure_seq, displacement_hit, liquidity_zone, atr_s, decimals,
                 )
+                lo_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[0]
+                hi_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[-1]
+                atr_for_targets = atr_s or 0
+                if bias == "bearish":
+                    target_lo = liquidity_zone + lo_mult * atr_for_targets
+                    target_hi = liquidity_zone + hi_mult * atr_for_targets
+                else:
+                    target_lo = liquidity_zone - hi_mult * atr_for_targets
+                    target_hi = liquidity_zone - lo_mult * atr_for_targets
                 try:
-                    send_telegram(update_msg)
+                    if not use_cached_structure:
+                        chart_path = generate_market_update_chart(
+                            pair, times_s, opens_s, highs_s, lows_s, closes_s, bias,
+                            swings_s, bos_index, bos_level, bias_flipped,
+                            liquidity_zone, atr_s, target_lo, target_hi,
+                        )
+                        send_telegram_photo(chart_path, update_msg)
+                        os.remove(chart_path)
+                    else:
+                        send_telegram(update_msg)
                     print(f"[{pair}] Market update posted.")
                 except Exception as e:
-                    print(f"[{pair}] Market update send failed: {e}")
+                    print(f"[{pair}] Market update chart failed ({e}) — falling back to text.")
+                    try:
+                        send_telegram(update_msg)
+                    except Exception as e2:
+                        print(f"[{pair}] Market update send failed: {e2}")
 
     setup = pair_state.get("setup")
     state[pair] = pair_state
@@ -1369,7 +1541,22 @@ def process_pair(pair, state):
     )
     if CHART_ENABLED:
         try:
-            chart_path = generate_chart(pair, opens5, highs5, lows5, closes5, bias, signal, entry, sl, tps, CHART_CANDLES)
+            chart_zone = None
+            chart_break_info = None
+            if ENTRY_MODE == "structure":
+                # Best-effort: the active zone the entry actually triggered
+                # from, and the original BOS/CHoCH level, drawn onto the
+                # 5M signal chart the same way as the market-update chart.
+                az = active_zones_for(pair_state, bias)
+                if az:
+                    chart_zone = az[0]
+                chart_break_info = {
+                    "x": 0,
+                    "level": setup["bos_level"],
+                    "label": "CHoCH" if setup.get("is_choch") else "BOS",
+                }
+            chart_path = generate_chart(pair, opens5, highs5, lows5, closes5, bias, signal, entry, sl, tps,
+                                         CHART_CANDLES, zone=chart_zone, break_info=chart_break_info)
             send_telegram_photo(chart_path, msg)
             os.remove(chart_path)
         except Exception as e:
@@ -1381,7 +1568,7 @@ def process_pair(pair, state):
 
     if AUTO_TRADE_ENABLED:
         filled, detail = place_demo_order(pair, signal, sl, tps[0])
-        status = "✅ Demo order placed" if filled else "⚠ Demo order NOT placed"
+        status = "✅ Demo order placed" if filled else "⚠️ Demo order NOT placed"
         send_telegram(f"{status} — {pair}\n{detail}\n(Only TP1 is set on the order — TP2-TP{len(tps)} must be managed manually.)")
         print(f"Demo trade [{pair}]: {status} — {detail}")
 
