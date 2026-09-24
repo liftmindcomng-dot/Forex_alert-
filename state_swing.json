@@ -86,6 +86,7 @@
     "last_market_update": {
       "bias": "bearish",
       "bos_level": 4274.05223
-    }
+    },
+    "breaker_blocks": []
   }
 }
