@@ -87,6 +87,7 @@
       "bias": "bearish",
       "bos_level": 4274.05223
     },
-    "breaker_blocks": []
+    "breaker_blocks": [],
+    "mitigation_blocks": []
   }
 }
