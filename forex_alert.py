@@ -26,15 +26,25 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
     Order-block candidates also require a genuine impulsive move to
     have followed them (OB_MIN_MOVE_ATR_MULT) — otherwise a random
     opposite-colored candle sitting in a choppy, non-impulsive stretch
-    could be mistaken for a real order block (see find_order_blocks).
-    Each break is tagged CHoCH (reverses the prior bias) or BOS
-    (continues it). Entry confirms on a 5M engulfing candle, rejection
-    wick, or fresh fair value gap inside any active zone (order block,
-    supply/demand, or breaker), restricted to the London/NY session
-    window. Each confirmed signal gets a condition label (e.g.
-    "OB+CHoCH+FVG+LIQ+SR+BRK") and a conviction score that sets its
-    hold-duration class (day / day_swing / swing), which in turn selects
-    which single hold-time threshold applies to it.
+    could be mistaken for a real order block (see find_order_blocks). A
+    mitigated order block also persists a second way, alongside the
+    breaker: as a "mitigation block" — same price range, same direction
+    (no flip) — a same-direction zone ICT treats as worth watching for
+    one final, deeper fill, distinct from the breaker's opposite-
+    direction role (see update_order_block_mitigation /
+    active_mitigation_zones_for). Optionally (PD_FILTER_ENABLED /
+    OTE_FILTER_ENABLED), a zone match also has to fall on the discount
+    side of the current leg for longs / premium side for shorts, or
+    inside the tighter Fibonacci-based OTE band, before it counts as an
+    entry (see check_smc_confirmation). Each break is tagged CHoCH
+    (reverses the prior bias) or BOS (continues it). Entry confirms on a
+    5M engulfing candle, rejection wick, or fresh fair value gap inside
+    any active zone (order block, supply/demand, breaker, or mitigation
+    block), restricted to the London/NY session window. Each confirmed
+    signal gets a condition label (e.g. "OB+CHoCH+FVG+LIQ+SR+BRK+OTE")
+    and a conviction score that sets its hold-duration class (day /
+    day_swing / swing), which in turn selects which single hold-time
+    threshold applies to it.
 
     If every persisted zone for the current bias has been mitigated
     (price closed fully through it) but the underlying structure break
@@ -186,6 +196,22 @@ OB_MAX_ZONES = int(os.environ.get("OB_MAX_ZONES", "3"))
 # Set to 0 to disable and accept any opposite-colored candle regardless
 # of what happened afterward.
 OB_MIN_MOVE_ATR_MULT = float(os.environ.get("OB_MIN_MOVE_ATR_MULT", "1.0"))
+
+# For ENTRY_MODE=structure only — Premium/Discount + OTE (Optimal Trade
+# Entry) filter. The current leg (pullback_zone -> bos_level) is split
+# at its midpoint (equilibrium): the half closer to the low is
+# "discount", the half closer to the high is "premium". SMC convention
+# only wants longs entered in discount and shorts entered in premium.
+# PD_FILTER_ENABLED gates entries on that half alone. OTE_FILTER_ENABLED
+# is the stricter version — it also requires price sit inside the
+# OTE_RETRACE_MIN-OTE_RETRACE_MAX Fibonacci retracement band of the leg
+# (the classic 62-79% "optimal trade entry" zone), not just anywhere in
+# the discount/premium half. Enabling OTE implies the discount/premium
+# side check too. Both default off so existing behavior is unchanged.
+PD_FILTER_ENABLED = os.environ.get("PD_FILTER_ENABLED", "false").lower() == "true"
+OTE_FILTER_ENABLED = os.environ.get("OTE_FILTER_ENABLED", "false").lower() == "true"
+OTE_RETRACE_MIN = float(os.environ.get("OTE_RETRACE_MIN", "0.62"))
+OTE_RETRACE_MAX = float(os.environ.get("OTE_RETRACE_MAX", "0.79"))
 
 # For ENTRY_MODE=structure only — liquidity pool / sweep detection.
 # Two or more swing highs (or lows) within this ATR-multiple tolerance of
@@ -753,6 +779,39 @@ def detect_fvg(opens, highs, lows, closes, i):
     return None
 
 
+def compute_equilibrium(bos_level, pullback_zone):
+    """Midpoint of the current leg (bos_level <-> pullback_zone) — the
+    dividing line between the discount half (favors longs) and the
+    premium half (favors shorts)."""
+    return (bos_level + pullback_zone) / 2
+
+
+def in_discount_or_premium(price, bos_level, pullback_zone, bias):
+    """True if `price` sits on the SMC-favored side of the leg's
+    equilibrium: at/below the midpoint for a bullish leg (discount —
+    buy low), at/above it for a bearish leg (premium — sell high)."""
+    eq = compute_equilibrium(bos_level, pullback_zone)
+    return price <= eq if bias == "bullish" else price >= eq
+
+
+def in_ote_zone(price, bos_level, pullback_zone, bias, ote_min, ote_max):
+    """True if `price` falls within the OTE (Optimal Trade Entry) band —
+    the ote_min-ote_max Fibonacci retracement of the leg, measured back
+    from the bos_level extreme toward the pullback_zone extreme. This is
+    a tighter sub-range inside the discount/premium half, not just
+    "somewhere past the midpoint.\""""
+    leg = abs(bos_level - pullback_zone)
+    if leg <= 0:
+        return False
+    if bias == "bullish":
+        zone_hi = bos_level - ote_min * leg
+        zone_lo = bos_level - ote_max * leg
+    else:
+        zone_lo = bos_level + ote_min * leg
+        zone_hi = bos_level + ote_max * leg
+    return zone_lo <= price <= zone_hi
+
+
 def in_session(iso_time, start_hour, end_hour):
     """Single window check (UTC hours). fetch_series requests
     timezone=UTC explicitly, so iso_time is guaranteed to be UTC here."""
@@ -777,14 +836,24 @@ def in_any_session(iso_time):
     return False
 
 
-def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end):
+def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end,
+                            bos_level=None, pullback_zone=None):
     """5M: price trading inside any candidate zone (order block, supply/
-    demand, or breaker), with an engulfing candle, a rejection wick, or a
-    fresh fair value gap in the trend direction, during the configured
-    session window. Zones are checked nearest-to-the-break first; the
-    first one that matches wins. Returns confirmation info plus the
-    individual trigger flags (used downstream for the condition label
-    and conviction score)."""
+    demand, breaker, or mitigation block), with an engulfing candle, a
+    rejection wick, or a fresh fair value gap in the trend direction,
+    during the configured session window. Zones are checked nearest-to-
+    the-break first; the first one that matches wins.
+
+    If PD_FILTER_ENABLED or OTE_FILTER_ENABLED and `bos_level`/
+    `pullback_zone` are given, a zone match is also required to fall on
+    the discount side (bullish) / premium side (bearish) of the current
+    leg's equilibrium — or, if OTE_FILTER_ENABLED, inside the tighter
+    62-79%-style OTE retracement band — before it counts as a
+    confirmation. A zone matching every other trigger but failing this
+    check is skipped in favor of the next candidate zone, same as any
+    other failed check. Returns confirmation info plus the individual
+    trigger flags (used downstream for the condition label and
+    conviction score)."""
     n = len(closes)
     i = n - 1
     if not in_any_session(times[i]):
@@ -804,12 +873,26 @@ def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, sessi
         if not (engulf or rej or fvg_hit):
             continue
         entry = closes[i]
+
+        pd_hit, ote_hit = False, False
+        if (PD_FILTER_ENABLED or OTE_FILTER_ENABLED) and bos_level is not None and pullback_zone is not None:
+            pd_hit = in_discount_or_premium(entry, bos_level, pullback_zone, bias)
+            if OTE_FILTER_ENABLED:
+                ote_hit = in_ote_zone(entry, bos_level, pullback_zone, bias, OTE_RETRACE_MIN, OTE_RETRACE_MAX)
+                if not ote_hit:
+                    continue  # outside the OTE band — try the next candidate zone
+            elif PD_FILTER_ENABLED and not pd_hit:
+                continue  # wrong side of equilibrium — try the next candidate zone
+
         sl_anchor = zone_low if bias == "bullish" else zone_high
         return {
             "entry": entry,
             "sl_anchor": sl_anchor,
             "zone_type": zone.get("type", "order_block"),
-            "confirmations": {"engulfing": engulf, "rejection": rej, "fvg": fvg_hit},
+            "confirmations": {
+                "engulfing": engulf, "rejection": rej, "fvg": fvg_hit,
+                "pd": pd_hit, "ote": ote_hit,
+            },
         }
     return None
 
@@ -829,12 +912,16 @@ def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, sessi
 # a stronger reaction level than a fresh one, since it's where trapped
 # opposite-side orders sit.
 
-def update_order_block_mitigation(order_blocks, current_price, breaker_blocks=None):
+def update_order_block_mitigation(order_blocks, current_price, breaker_blocks=None, mitigation_blocks=None):
     """Deactivate any persisted order block price has fully closed
     through — it's been mitigated and is no longer a valid zone in its
     original direction. If `breaker_blocks` is passed, the same price
     range is also promoted into that list as a breaker block, flipped to
-    the opposite direction."""
+    the opposite direction. If `mitigation_blocks` is passed, the same
+    price range is ALSO kept in that separate list — same shape, same
+    direction as the original OB (no flip) — since ICT treats a failed
+    OB as still worth watching for a final, deeper fill in the original
+    direction, distinct from the breaker's opposite-direction role."""
     for ob in order_blocks:
         if not ob.get("active", True):
             continue
@@ -845,12 +932,22 @@ def update_order_block_mitigation(order_blocks, current_price, breaker_blocks=No
                     "top": ob["top"], "bot": ob["bot"], "type": "breaker_block",
                     "direction": "bearish", "active": True, "is_choch": False,
                 })
+            if mitigation_blocks is not None:
+                mitigation_blocks.append({
+                    "top": ob["top"], "bot": ob["bot"], "type": "mitigation_block",
+                    "direction": "bullish", "active": True, "is_choch": False,
+                })
         elif ob["direction"] == "bearish" and current_price > ob["top"]:
             ob["active"] = False
             if breaker_blocks is not None:
                 breaker_blocks.append({
                     "top": ob["top"], "bot": ob["bot"], "type": "breaker_block",
                     "direction": "bullish", "active": True, "is_choch": False,
+                })
+            if mitigation_blocks is not None:
+                mitigation_blocks.append({
+                    "top": ob["top"], "bot": ob["bot"], "type": "mitigation_block",
+                    "direction": "bearish", "active": True, "is_choch": False,
                 })
 
 
@@ -909,9 +1006,26 @@ def active_breaker_zones_for(pair_state, bias):
     ]
 
 
-def build_condition_label(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False):
-    """Builds a label like 'OB+CHoCH+FVG+LIQ+SR+BRK' from everything that
-    actually fired for this signal, in a fixed, readable order."""
+def active_mitigation_zones_for(pair_state, bias):
+    """Same shape again, reading pair_state's mitigation_blocks list.
+    Unlike breakers these never flip direction, so a mitigation block
+    only ever matches the SAME bias it was created under — it becomes
+    irrelevant (and is cleared) the moment that bias flips, since
+    there's no "final fill in the old direction" story left once the
+    trend has reversed."""
+    return [
+        {"high": mb["top"], "low": mb["bot"], "type": mb["type"]}
+        for mb in reversed(pair_state.get("mitigation_blocks", []))
+        if mb["direction"] == bias and mb.get("active", True)
+    ]
+
+
+def build_condition_label(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False,
+                           mitigation_hit=False, pd_hit=False, ote_hit=False):
+    """Builds a label like 'OB+CHoCH+FVG+LIQ+SR+BRK+OTE' from everything
+    that actually fired for this signal, in a fixed, readable order.
+    OTE implies the discount/premium side check too, so only one of
+    OTE/PD is ever shown — no point tagging both for the same fact."""
     parts = ["OB", "CHoCH" if is_choch else "BOS"]
     if confirmations.get("fvg"):
         parts.append("FVG")
@@ -927,19 +1041,30 @@ def build_condition_label(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=F
         parts.append("SD")
     if breaker_hit:
         parts.append("BRK")
+    if mitigation_hit:
+        parts.append("MIT")
+    if ote_hit:
+        parts.append("OTE")
+    elif pd_hit:
+        parts.append("PD")
     return "+".join(parts)
 
 
-def classify_conviction(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False):
+def classify_conviction(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False,
+                         mitigation_hit=False, ote_hit=False):
     """Conviction score -> hold-duration class ("day" / "day_swing" /
     "swing"), which selects the single hold-time threshold applied to
     this signal (see check_hold_time_nudges). CHoCH and displacement
     carry the most weight since they indicate a genuinely new
     directional push, not just a pullback within an existing range. A
     breaker-block entry (a failed zone flipping and holding on retest)
-    gets the same weight as an S/R or supply/demand confluence — it's a
-    meaningful confluence but not on its own a reason to expect a longer
-    hold."""
+    gets the same weight as an S/R or supply/demand confluence, as does
+    an OTE-zone entry (a precise Fibonacci-band confluence) — each is
+    meaningful but not on its own a reason to expect a longer hold. A
+    mitigation-block entry (a zone that already failed once, held for a
+    same-direction retest) scores nothing extra — it's the weakest of
+    the zone types here, included for the condition label's visibility
+    rather than as a conviction booster."""
     score = 0
     if is_choch:
         score += 2
@@ -957,6 +1082,9 @@ def classify_conviction(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=Fal
         score += 1
     if breaker_hit:
         score += 1
+    if ote_hit:
+        score += 1
+    # mitigation_hit intentionally contributes 0 — see docstring.
 
     if score >= 5:
         return "swing", "High conviction (CHoCH/displacement + multiple confluences) — manage by structure."
@@ -1388,6 +1516,12 @@ def process_pair(pair, state):
     bias_flipped = prior_bias is not None and prior_bias != bias
     if bias_flipped:
         pair_state["setup"] = None  # bias flipped, drop any stale setup
+        # Mitigation blocks never flip direction, so a same-direction
+        # "final fill" zone from the OLD bias has nothing left to say
+        # once the trend has actually reversed — clear them. Breaker
+        # blocks are left alone: their flipped direction is exactly the
+        # NEW bias, so they may now become relevant for the first time.
+        pair_state["mitigation_blocks"] = []
     pair_state["bias"] = bias
 
     # --- structure break: cached, only refetched every STRUCTURE_CACHE_MINUTES
@@ -1458,9 +1592,12 @@ def process_pair(pair, state):
             # into a breaker block, then prune both lists.
             sync_order_blocks(pair_state, bias, zones, bias_flipped, OB_MAX_ZONES)
             breakers = pair_state.setdefault("breaker_blocks", [])
-            update_order_block_mitigation(pair_state.get("order_blocks", []), closes_s[-1], breaker_blocks=breakers)
+            mitigations = pair_state.setdefault("mitigation_blocks", [])
+            update_order_block_mitigation(pair_state.get("order_blocks", []), closes_s[-1],
+                                           breaker_blocks=breakers, mitigation_blocks=mitigations)
             update_breaker_mitigation(breakers, closes_s[-1])
             prune_order_blocks(breakers, OB_MAX_ZONES)
+            prune_order_blocks(mitigations, OB_MAX_ZONES)
 
         pair_state["structure_cache"] = {
             "bos": list(bos) if bos else None,
@@ -1565,8 +1702,8 @@ def process_pair(pair, state):
         return
 
     if ENTRY_MODE == "structure":
-        if not setup.get("zones") and not pair_state.get("breaker_blocks"):
-            print(f"[{pair}] No order block / supply-demand / breaker zone found for this break — skipping.")
+        if not setup.get("zones") and not pair_state.get("breaker_blocks") and not pair_state.get("mitigation_blocks"):
+            print(f"[{pair}] No order block / supply-demand / breaker / mitigation zone found for this break — skipping.")
             return
         # NOTE: liquidity sweep is intentionally NOT gated here anymore.
         # It used to hard-block entry when no sweep was detected, but a
@@ -1594,14 +1731,21 @@ def process_pair(pair, state):
         # mitigation check), then use whichever persisted zones for this
         # bias are still active, merging order blocks + breakers.
         breakers = pair_state.setdefault("breaker_blocks", [])
-        update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1], breaker_blocks=breakers)
+        mitigations = pair_state.setdefault("mitigation_blocks", [])
+        update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1],
+                                       breaker_blocks=breakers, mitigation_blocks=mitigations)
         update_breaker_mitigation(breakers, closes5[-1])
-        active_zones = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
+        # Order blocks and breakers checked first (freshest/strongest
+        # signal types); mitigation blocks appended last, lowest
+        # priority — check_smc_confirmation tries zones in list order.
+        active_zones = (active_zones_for(pair_state, bias)
+                         + active_breaker_zones_for(pair_state, bias)
+                         + active_mitigation_zones_for(pair_state, bias))
 
         if not active_zones:
-            # All persisted zones (order blocks and breakers) for this
-            # bias have been mitigated. Rather than waiting up to
-            # STRUCTURE_CACHE_MINUTES for the next natural refresh,
+            # All persisted zones (order blocks, breakers, mitigations)
+            # for this bias have been mitigated. Rather than waiting up
+            # to STRUCTURE_CACHE_MINUTES for the next natural refresh,
             # re-derive candidates right now against the current break
             # so a still-valid setup isn't stuck signal-less.
             times_s2, opens_s2, highs_s2, lows_s2, closes_s2 = fetch_series(pair, TF_STRUCTURE, outputsize=150)
@@ -1624,18 +1768,23 @@ def process_pair(pair, state):
                         fresh_zones.append(sd_zone)
                 if fresh_zones:
                     sync_order_blocks(pair_state, bias, fresh_zones, False, OB_MAX_ZONES)
-                    update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1], breaker_blocks=breakers)
+                    update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1],
+                                                   breaker_blocks=breakers, mitigation_blocks=mitigations)
                     update_breaker_mitigation(breakers, closes5[-1])
                     prune_order_blocks(breakers, OB_MAX_ZONES)
-                    active_zones = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
+                    prune_order_blocks(mitigations, OB_MAX_ZONES)
+                    active_zones = (active_zones_for(pair_state, bias)
+                                     + active_breaker_zones_for(pair_state, bias)
+                                     + active_mitigation_zones_for(pair_state, bias))
                     print(f"[{pair}] Re-derived {len(fresh_zones)} fresh zone(s) after mitigation.")
 
         if not active_zones:
-            print(f"[{pair}] No active order-block/zone/breaker remaining for this bias — skipping.")
+            print(f"[{pair}] No active order-block/zone/breaker/mitigation remaining for this bias — skipping.")
             confirmation = None
         else:
             confirmation = check_smc_confirmation(
-                times5, opens5, highs5, lows5, closes5, bias, active_zones, SESSION_START_UTC, SESSION_END_UTC)
+                times5, opens5, highs5, lows5, closes5, bias, active_zones, SESSION_START_UTC, SESSION_END_UTC,
+                bos_level=setup["bos_level"], pullback_zone=setup["pullback_zone"])
     elif ENTRY_MODE == "retest_or_pullback":
         # Whichever fires first counts — checked in this order each run.
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
@@ -1666,10 +1815,14 @@ def process_pair(pair, state):
         sr_hit = SR_MIN_TOUCHES > 0 and setup.get("sr_ok", False)
         sd_hit = confirmation.get("zone_type") in ("demand_zone", "supply_zone")
         breaker_hit = confirmation.get("zone_type") == "breaker_block"
+        mitigation_hit = confirmation.get("zone_type") == "mitigation_block"
+        pd_hit = confs.get("pd", False)
+        ote_hit = confs.get("ote", False)
         is_choch = setup.get("is_choch", False)
-        confirmation["condition_label"] = build_condition_label(is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit)
+        confirmation["condition_label"] = build_condition_label(
+            is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit, mitigation_hit, pd_hit, ote_hit)
         confirmation["duration_class"], confirmation["duration_note"] = classify_conviction(
-            is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit)
+            is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit, mitigation_hit, ote_hit)
     else:
         is_choch = setup.get("is_choch", False)
         displacement_hit = setup.get("displacement_hit", False)
@@ -1733,7 +1886,8 @@ def process_pair(pair, state):
                 # from (order block or breaker), and the original BOS/
                 # CHoCH level, drawn onto the 5M signal chart the same way
                 # as the market-update chart.
-                az = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
+                az = (active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
+                      + active_mitigation_zones_for(pair_state, bias))
                 if az:
                     chart_zone = az[0]
                 chart_break_info = {
