@@ -18,12 +18,21 @@ This one script drives THREE separate strategies, selected by ENTRY_MODE
     signals. Candidate zones (order blocks + supply/demand) persist
     across runs in state.json with mitigation tracking — a zone stops
     being tradeable once price closes fully through it, rather than
-    being rebuilt from scratch on every new break. Each break is tagged
-    CHoCH (reverses the prior bias) or BOS (continues it). Entry
-    confirms on a 5M engulfing candle, rejection wick, or fresh fair
-    value gap inside any active zone, restricted to the London/NY
-    session window. Each confirmed signal gets a condition label (e.g.
-    "OB+CHoCH+FVG+LIQ+SR") and a conviction score that sets its
+    being rebuilt from scratch on every new break. A mitigated order
+    block is also promoted into a "breaker block" — the same price
+    range, flipped to the opposite direction — since a failed OB often
+    acts as support/resistance in the new direction on a later retest
+    (see update_order_block_mitigation / active_breaker_zones_for).
+    Order-block candidates also require a genuine impulsive move to
+    have followed them (OB_MIN_MOVE_ATR_MULT) — otherwise a random
+    opposite-colored candle sitting in a choppy, non-impulsive stretch
+    could be mistaken for a real order block (see find_order_blocks).
+    Each break is tagged CHoCH (reverses the prior bias) or BOS
+    (continues it). Entry confirms on a 5M engulfing candle, rejection
+    wick, or fresh fair value gap inside any active zone (order block,
+    supply/demand, or breaker), restricted to the London/NY session
+    window. Each confirmed signal gets a condition label (e.g.
+    "OB+CHoCH+FVG+LIQ+SR+BRK") and a conviction score that sets its
     hold-duration class (day / day_swing / swing), which in turn selects
     which single hold-time threshold applies to it.
 
@@ -75,11 +84,11 @@ Run on a schedule (recommended: every 5 minutes, matching the entry
 timeframe) via GitHub Actions — see check-signal.yml.
 
 State (per-pair bias, active structure break/zones, persisted order
-blocks with mitigation status, whether it's already been confirmed/
-alerted, hold-time nudge history, plus cached 4H/structure results) is
-kept in state.json so the same setup doesn't re-trigger a Telegram
-message on every run, and so slower timeframes aren't re-fetched every
-cycle.
+blocks + breaker blocks with mitigation status, whether it's already
+been confirmed/alerted, hold-time nudge history, plus cached 4H/
+structure results) is kept in state.json so the same setup doesn't
+re-trigger a Telegram message on every run, and so slower timeframes
+aren't re-fetched every cycle.
 
 API USAGE: with caching, only the 5M entry candle is fetched every run —
 4H is cached for TREND_CACHE_MINUTES, structure for
@@ -165,8 +174,18 @@ SESSION2_END_UTC = int(os.environ.get("SESSION2_END_UTC", "9"))
 
 # For ENTRY_MODE=structure only — how many unmitigated order-block zones
 # (plus one supply/demand zone, if found) to keep as live candidates,
-# per direction (persisted across runs — see sync_order_blocks).
+# per direction (persisted across runs — see sync_order_blocks). The
+# same cap is applied to breaker blocks per direction.
 OB_MAX_ZONES = int(os.environ.get("OB_MAX_ZONES", "3"))
+
+# For ENTRY_MODE=structure only — order-block quality filter. A
+# candidate OB candle must be followed (before the break) by a move of
+# at least this many ATRs in the trend direction, so a random opposite-
+# colored candle sitting in a choppy range isn't mistaken for a real
+# order block (i.e. a candle an impulsive leg actually originated from).
+# Set to 0 to disable and accept any opposite-colored candle regardless
+# of what happened afterward.
+OB_MIN_MOVE_ATR_MULT = float(os.environ.get("OB_MIN_MOVE_ATR_MULT", "1.0"))
 
 # For ENTRY_MODE=structure only — liquidity pool / sweep detection.
 # Two or more swing highs (or lows) within this ATR-multiple tolerance of
@@ -468,22 +487,41 @@ def check_retest_confirmation(highs, lows, closes, bias, bos_level, atr_val, loo
 # ---------------- SMC concepts: zones, liquidity, S/R confluence ----------------
 # Used by ENTRY_MODE=structure. Mirrors the top-down ladder: 4H bias ->
 # 1H displacement break, scored (not gated) by a prior liquidity sweep ->
-# order block / supply-demand zones, optionally filtered by S/R
-# confluence -> 5M engulfing/rejection/FVG confirmation inside a zone,
-# during London/NY session hours.
+# order block / supply-demand / breaker zones, optionally filtered by
+# S/R confluence -> 5M engulfing/rejection/FVG confirmation inside a
+# zone, during London/NY session hours.
 
-def find_order_blocks(opens, highs, lows, closes, bias, before_index, lookback=15, max_zones=3):
+def find_order_blocks(opens, highs, lows, closes, bias, before_index, lookback=15, max_zones=3,
+                       atr_val=None, min_move_atr_mult=None):
     """Up to `max_zones` order-block candidates before the break — each
     is the last opposite-colored candle before an impulsive leg within
     this lookback window (for a bullish break: the last bearish candle
     before an up-move; for bearish: the last bullish candle before a
-    down-move). Ordered nearest-to-the-break first."""
+    down-move). Ordered nearest-to-the-break first.
+
+    If `min_move_atr_mult` and `atr_val` are given, a candidate candle
+    only counts if price actually moved at least `min_move_atr_mult` *
+    ATR away from its close, in the trend direction, at some point
+    between it and `before_index` — i.e. an impulsive leg genuinely
+    originated there. Without this, any opposite-colored candle in the
+    lookback window qualifies regardless of what happened afterward,
+    which can flag a random candle from a choppy, non-impulsive stretch
+    as an "order block." Leave both as None to skip the check (old
+    behavior)."""
     start = max(0, before_index - lookback)
     zones = []
     for i in range(before_index - 1, start - 1, -1):
         is_bearish = closes[i] < opens[i]
         is_bullish = closes[i] > opens[i]
         if (bias == "bullish" and is_bearish) or (bias == "bearish" and is_bullish):
+            if min_move_atr_mult and atr_val:
+                following = range(i + 1, before_index)
+                if bias == "bullish":
+                    move = max((highs[j] for j in following), default=closes[i]) - closes[i]
+                else:
+                    move = closes[i] - min((lows[j] for j in following), default=closes[i])
+                if move < min_move_atr_mult * atr_val:
+                    continue  # no real impulse followed this candle — skip it
             zones.append({"high": highs[i], "low": lows[i], "type": "order_block"})
         if len(zones) >= max_zones:
             break
@@ -740,8 +778,8 @@ def in_any_session(iso_time):
 
 
 def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, session_start, session_end):
-    """5M: price trading inside any candidate zone (order block or
-    supply/demand), with an engulfing candle, a rejection wick, or a
+    """5M: price trading inside any candidate zone (order block, supply/
+    demand, or breaker), with an engulfing candle, a rejection wick, or a
     fresh fair value gap in the trend direction, during the configured
     session window. Zones are checked nearest-to-the-break first; the
     first one that matches wins. Returns confirmation info plus the
@@ -776,26 +814,64 @@ def check_smc_confirmation(times, opens, highs, lows, closes, bias, zones, sessi
     return None
 
 
-# ---------------- persistent order-block tracking (ENTRY_MODE=structure) ----------------
-# Zones survive across runs in state.json (pair_state["order_blocks"]),
-# tagged with direction and whether they came from a CHoCH or a BOS
-# break, and are deactivated once price closes fully through them
-# (mitigated) rather than being rebuilt from scratch on every new break.
+# ---------------- persistent order-block / breaker-block tracking (ENTRY_MODE=structure) ----------------
+# Zones survive across runs in state.json (pair_state["order_blocks"] and
+# pair_state["breaker_blocks"]), tagged with direction and whether they
+# came from a CHoCH or a BOS break, and are deactivated once price
+# closes fully through them (mitigated) rather than being rebuilt from
+# scratch on every new break.
+#
+# A breaker block is a former order block that FAILED — price closed
+# fully through it — so instead of just discarding it, the same price
+# range is promoted into a new zone in the OPPOSITE direction (a broken
+# bullish OB flips to act as resistance on a later bearish leg, and vice
+# versa). This mirrors the real SMC idea that a failed OB often becomes
+# a stronger reaction level than a fresh one, since it's where trapped
+# opposite-side orders sit.
 
-def update_order_block_mitigation(order_blocks, current_price):
+def update_order_block_mitigation(order_blocks, current_price, breaker_blocks=None):
     """Deactivate any persisted order block price has fully closed
-    through — it's been mitigated and is no longer a valid zone."""
+    through — it's been mitigated and is no longer a valid zone in its
+    original direction. If `breaker_blocks` is passed, the same price
+    range is also promoted into that list as a breaker block, flipped to
+    the opposite direction."""
     for ob in order_blocks:
         if not ob.get("active", True):
             continue
         if ob["direction"] == "bullish" and current_price < ob["bot"]:
             ob["active"] = False
+            if breaker_blocks is not None:
+                breaker_blocks.append({
+                    "top": ob["top"], "bot": ob["bot"], "type": "breaker_block",
+                    "direction": "bearish", "active": True, "is_choch": False,
+                })
         elif ob["direction"] == "bearish" and current_price > ob["top"]:
             ob["active"] = False
+            if breaker_blocks is not None:
+                breaker_blocks.append({
+                    "top": ob["top"], "bot": ob["bot"], "type": "breaker_block",
+                    "direction": "bullish", "active": True, "is_choch": False,
+                })
+
+
+def update_breaker_mitigation(breaker_blocks, current_price):
+    """A breaker block gets invalidated the same way an order block
+    does — if price closes back fully through it (in its flipped
+    direction), it's no longer a valid zone either. Not re-flipped again
+    (no breaker-of-a-breaker chaining) — it's just dropped."""
+    for bb in breaker_blocks:
+        if not bb.get("active", True):
+            continue
+        if bb["direction"] == "bullish" and current_price < bb["bot"]:
+            bb["active"] = False
+        elif bb["direction"] == "bearish" and current_price > bb["top"]:
+            bb["active"] = False
 
 
 def prune_order_blocks(order_blocks, max_zones):
-    """Keep at most max_zones per direction, oldest dropped first."""
+    """Keep at most max_zones per direction, oldest dropped first. Used
+    for both order_blocks and breaker_blocks (same shape: a list of
+    dicts with a "direction" key)."""
     for direction in ("bullish", "bearish"):
         same_dir = [ob for ob in order_blocks if ob["direction"] == direction]
         while len(same_dir) > max_zones:
@@ -823,8 +899,18 @@ def active_zones_for(pair_state, bias):
     ]
 
 
-def build_condition_label(is_choch, confirmations, sr_hit, sd_hit):
-    """Builds a label like 'OB+CHoCH+FVG+LIQ+SR' from everything that
+def active_breaker_zones_for(pair_state, bias):
+    """Same shape as active_zones_for, but reading pair_state's
+    breaker_blocks list instead of order_blocks."""
+    return [
+        {"high": bb["top"], "low": bb["bot"], "type": bb["type"]}
+        for bb in reversed(pair_state.get("breaker_blocks", []))
+        if bb["direction"] == bias and bb.get("active", True)
+    ]
+
+
+def build_condition_label(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False):
+    """Builds a label like 'OB+CHoCH+FVG+LIQ+SR+BRK' from everything that
     actually fired for this signal, in a fixed, readable order."""
     parts = ["OB", "CHoCH" if is_choch else "BOS"]
     if confirmations.get("fvg"):
@@ -839,15 +925,21 @@ def build_condition_label(is_choch, confirmations, sr_hit, sd_hit):
         parts.append("SR")
     if sd_hit:
         parts.append("SD")
+    if breaker_hit:
+        parts.append("BRK")
     return "+".join(parts)
 
 
-def classify_conviction(is_choch, confirmations, sr_hit, sd_hit):
+def classify_conviction(is_choch, confirmations, sr_hit, sd_hit, breaker_hit=False):
     """Conviction score -> hold-duration class ("day" / "day_swing" /
     "swing"), which selects the single hold-time threshold applied to
     this signal (see check_hold_time_nudges). CHoCH and displacement
     carry the most weight since they indicate a genuinely new
-    directional push, not just a pullback within an existing range."""
+    directional push, not just a pullback within an existing range. A
+    breaker-block entry (a failed zone flipping and holding on retest)
+    gets the same weight as an S/R or supply/demand confluence — it's a
+    meaningful confluence but not on its own a reason to expect a longer
+    hold."""
     score = 0
     if is_choch:
         score += 2
@@ -862,6 +954,8 @@ def classify_conviction(is_choch, confirmations, sr_hit, sd_hit):
     if sr_hit:
         score += 1
     if sd_hit:
+        score += 1
+    if breaker_hit:
         score += 1
 
     if score >= 5:
@@ -1338,7 +1432,8 @@ def process_pair(pair, state):
         if bos and ENTRY_MODE == "structure":
             bos_level, pullback_zone, bos_index = bos
 
-            zones = find_order_blocks(opens_s, highs_s, lows_s, closes_s, bias, bos_index, OB_LOOKBACK, OB_MAX_ZONES)
+            zones = find_order_blocks(opens_s, highs_s, lows_s, closes_s, bias, bos_index, OB_LOOKBACK, OB_MAX_ZONES,
+                                       atr_val=atr_s, min_move_atr_mult=OB_MIN_MOVE_ATR_MULT)
             if len(zones) < OB_MAX_ZONES:
                 sd_zone = find_supply_demand_zone(
                     opens_s, highs_s, lows_s, closes_s, bias, bos_index, atr_s,
@@ -1359,10 +1454,13 @@ def process_pair(pair, state):
                     sr_ok = False
 
             # Persist zones into the running order-block store (mitigation-
-            # tracked, tagged CHoCH/BOS) and update mitigation off the
-            # latest structure-timeframe close.
+            # tracked, tagged CHoCH/BOS), promote any newly-mitigated OB
+            # into a breaker block, then prune both lists.
             sync_order_blocks(pair_state, bias, zones, bias_flipped, OB_MAX_ZONES)
-            update_order_block_mitigation(pair_state.get("order_blocks", []), closes_s[-1])
+            breakers = pair_state.setdefault("breaker_blocks", [])
+            update_order_block_mitigation(pair_state.get("order_blocks", []), closes_s[-1], breaker_blocks=breakers)
+            update_breaker_mitigation(breakers, closes_s[-1])
+            prune_order_blocks(breakers, OB_MAX_ZONES)
 
         pair_state["structure_cache"] = {
             "bos": list(bos) if bos else None,
@@ -1467,8 +1565,8 @@ def process_pair(pair, state):
         return
 
     if ENTRY_MODE == "structure":
-        if not setup.get("zones"):
-            print(f"[{pair}] No order block / supply-demand zone found for this break — skipping.")
+        if not setup.get("zones") and not pair_state.get("breaker_blocks"):
+            print(f"[{pair}] No order block / supply-demand / breaker zone found for this break — skipping.")
             return
         # NOTE: liquidity sweep is intentionally NOT gated here anymore.
         # It used to hard-block entry when no sweep was detected, but a
@@ -1491,16 +1589,21 @@ def process_pair(pair, state):
     if ENTRY_MODE == "retest":
         confirmation = check_retest_confirmation(highs5, lows5, closes5, bias, setup["bos_level"], a5)
     elif ENTRY_MODE == "structure":
-        # Re-check mitigation against the freshest (5M) close, then use
-        # whichever persisted zones for this bias are still active.
-        update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1])
-        active_zones = active_zones_for(pair_state, bias)
+        # Re-check mitigation against the freshest (5M) close (order
+        # blocks flip into breakers here too, and breakers get their own
+        # mitigation check), then use whichever persisted zones for this
+        # bias are still active, merging order blocks + breakers.
+        breakers = pair_state.setdefault("breaker_blocks", [])
+        update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1], breaker_blocks=breakers)
+        update_breaker_mitigation(breakers, closes5[-1])
+        active_zones = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
 
         if not active_zones:
-            # All persisted zones for this bias have been mitigated. Rather
-            # than waiting up to STRUCTURE_CACHE_MINUTES for the next
-            # natural refresh, re-derive candidates right now against the
-            # current break so a still-valid setup isn't stuck signal-less.
+            # All persisted zones (order blocks and breakers) for this
+            # bias have been mitigated. Rather than waiting up to
+            # STRUCTURE_CACHE_MINUTES for the next natural refresh,
+            # re-derive candidates right now against the current break
+            # so a still-valid setup isn't stuck signal-less.
             times_s2, opens_s2, highs_s2, lows_s2, closes_s2 = fetch_series(pair, TF_STRUCTURE, outputsize=150)
             time.sleep(API_CALL_SLEEP)
             atr_s2 = atr(highs_s2, lows_s2, closes_s2, 14)
@@ -1511,7 +1614,8 @@ def process_pair(pair, state):
             if bos2:
                 _, _, bos_index2 = bos2
                 fresh_zones = find_order_blocks(
-                    opens_s2, highs_s2, lows_s2, closes_s2, bias, bos_index2, OB_LOOKBACK, OB_MAX_ZONES)
+                    opens_s2, highs_s2, lows_s2, closes_s2, bias, bos_index2, OB_LOOKBACK, OB_MAX_ZONES,
+                    atr_val=atr_s2, min_move_atr_mult=OB_MIN_MOVE_ATR_MULT)
                 if len(fresh_zones) < OB_MAX_ZONES:
                     sd_zone = find_supply_demand_zone(
                         opens_s2, highs_s2, lows_s2, closes_s2, bias, bos_index2, atr_s2,
@@ -1520,12 +1624,14 @@ def process_pair(pair, state):
                         fresh_zones.append(sd_zone)
                 if fresh_zones:
                     sync_order_blocks(pair_state, bias, fresh_zones, False, OB_MAX_ZONES)
-                    update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1])
-                    active_zones = active_zones_for(pair_state, bias)
+                    update_order_block_mitigation(pair_state.get("order_blocks", []), closes5[-1], breaker_blocks=breakers)
+                    update_breaker_mitigation(breakers, closes5[-1])
+                    prune_order_blocks(breakers, OB_MAX_ZONES)
+                    active_zones = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
                     print(f"[{pair}] Re-derived {len(fresh_zones)} fresh zone(s) after mitigation.")
 
         if not active_zones:
-            print(f"[{pair}] No active order-block/zone remaining for this bias — skipping.")
+            print(f"[{pair}] No active order-block/zone/breaker remaining for this bias — skipping.")
             confirmation = None
         else:
             confirmation = check_smc_confirmation(
@@ -1559,10 +1665,11 @@ def process_pair(pair, state):
         }
         sr_hit = SR_MIN_TOUCHES > 0 and setup.get("sr_ok", False)
         sd_hit = confirmation.get("zone_type") in ("demand_zone", "supply_zone")
+        breaker_hit = confirmation.get("zone_type") == "breaker_block"
         is_choch = setup.get("is_choch", False)
-        confirmation["condition_label"] = build_condition_label(is_choch, full_confirmations, sr_hit, sd_hit)
+        confirmation["condition_label"] = build_condition_label(is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit)
         confirmation["duration_class"], confirmation["duration_note"] = classify_conviction(
-            is_choch, full_confirmations, sr_hit, sd_hit)
+            is_choch, full_confirmations, sr_hit, sd_hit, breaker_hit)
     else:
         is_choch = setup.get("is_choch", False)
         displacement_hit = setup.get("displacement_hit", False)
@@ -1623,9 +1730,10 @@ def process_pair(pair, state):
             chart_break_info = None
             if ENTRY_MODE == "structure":
                 # Best-effort: the active zone the entry actually triggered
-                # from, and the original BOS/CHoCH level, drawn onto the
-                # 5M signal chart the same way as the market-update chart.
-                az = active_zones_for(pair_state, bias)
+                # from (order block or breaker), and the original BOS/
+                # CHoCH level, drawn onto the 5M signal chart the same way
+                # as the market-update chart.
+                az = active_zones_for(pair_state, bias) + active_breaker_zones_for(pair_state, bias)
                 if az:
                     chart_zone = az[0]
                 chart_break_info = {
