@@ -17,9 +17,17 @@ impulsive breakout leg, now supporting multiple stacked zones), and a
 displacement filter (breaking candle's range must clear a minimum ATR
 multiple).
 
-Chart styling: bold arrow markers at swing points, multiple order-block
-zones, a current-price badge, and a computed (ATR-based, not hand-drawn)
-projection line toward a "Price range" target.
+Bias now requires the last-two-swing-highs AND last-two-swing-lows to
+actually agree on direction before calling a trend (Bullish/Bearish).
+When they disagree (a contracting or expanding range), bias is Neutral
+and the post describes the range honestly instead of forcing a
+directional narrative onto data that doesn't support one.
+
+Chart styling: bold arrow markers at swing points (labeled by each
+swing's own direction), an order-block zone on a real trend or a
+range box on Neutral, a current-price badge, and a computed
+(ATR-based, not hand-drawn) projection line toward a "Price range"
+target — only drawn when there's an actual directional bias.
 """
 
 import os
@@ -147,6 +155,16 @@ def find_order_blocks_multi(df, bias, swings, lookback=OB_LOOKBACK, max_zones=3)
 
 def analyze_structure_deep(df):
     """Deeper structure read than the original 2-swing version:
+      - Bias now requires the last-two-swing-highs AND last-two-swing-lows
+        to actually agree on direction (both lower = Bearish, both higher
+        = Bullish). Previously the high check and low check ran
+        independently and the low check's result silently overwrote the
+        high check's — so a Lower High + Higher Low (a contracting range,
+        not a trend) could still get tagged "Bearish" from the high alone,
+        and the narrative would print both notes side by side as if they
+        told one consistent story. Disagreement is now reported honestly
+        as a range (Neutral bias, no break/order-block computed) instead
+        of a fabricated trend call.
       - BOS vs CHoCH: compares the latest swing break against the trend
         implied by the TREND_LOOKBACK_SWINGS swings before it, so a
         break that reverses the prior trend is tagged CHoCH, one that
@@ -169,25 +187,41 @@ def analyze_structure_deep(df):
     swings_high = swings_high_all.tail(4)
     swings_low = swings_low_all.tail(4)
 
+    high_dir = None
+    low_dir = None
+    if len(swings_high) >= 2:
+        high_dir = "lower" if swings_high["Swing_High"].iloc[-1] < swings_high["Swing_High"].iloc[-2] else "higher"
+    if len(swings_low) >= 2:
+        low_dir = "lower" if swings_low["Swing_Low"].iloc[-1] < swings_low["Swing_Low"].iloc[-2] else "higher"
+
     structure_notes = []
     bias = "Neutral"
 
-    if len(swings_high) >= 2:
-        if swings_high["Swing_High"].iloc[-1] < swings_high["Swing_High"].iloc[-2]:
+    if high_dir and low_dir:
+        if high_dir == "lower" and low_dir == "lower":
+            bias = "Bearish"
             structure_notes.append("Lower High confirmed")
-            bias = "Bearish"
-        else:
-            structure_notes.append("Higher High")
-            bias = "Bullish"
-
-    if len(swings_low) >= 2:
-        if swings_low["Swing_Low"].iloc[-1] > swings_low["Swing_Low"].iloc[-2]:
-            structure_notes.append("Higher Low")
-            if bias == "Neutral":
-                bias = "Bullish"
-        else:
             structure_notes.append("Lower Low")
-            bias = "Bearish"
+        elif high_dir == "higher" and low_dir == "higher":
+            bias = "Bullish"
+            structure_notes.append("Higher High")
+            structure_notes.append("Higher Low")
+        elif high_dir == "lower" and low_dir == "higher":
+            bias = "Neutral"
+            structure_notes.append("Lower High confirmed")
+            structure_notes.append("Higher Low")
+            structure_notes.append("Contracting range — no clear trend")
+        else:  # higher high, lower low
+            bias = "Neutral"
+            structure_notes.append("Higher High")
+            structure_notes.append("Lower Low")
+            structure_notes.append("Expanding range — no clear trend")
+    elif high_dir:
+        bias = "Bearish" if high_dir == "lower" else "Bullish"
+        structure_notes.append("Lower High confirmed" if high_dir == "lower" else "Higher High")
+    elif low_dir:
+        bias = "Bullish" if low_dir == "higher" else "Bearish"
+        structure_notes.append("Higher Low" if low_dir == "higher" else "Lower Low")
 
     # --- infer the PRIOR trend from a longer swing lookback, to decide
     # BOS vs CHoCH for the most recent break ---
@@ -269,12 +303,19 @@ def create_chart(df, filename="xauusd_chart.png"):
     offset_start = len(df) - len(plot_df)
     last_x = len(plot_df) - 1
 
-    # --- swing markers as bold arrows ---
+    # --- swing markers as bold arrows (label each swing by its own
+    # actual direction now, not by the overall bias — needed since bias
+    # can be Neutral on a range, where highs and lows point opposite
+    # ways and a single bias-based label would be wrong for one side) ---
     for idx, row in swings_high.tail(2).iterrows():
         pos = df.index.get_loc(idx) - offset_start
         if pos < 0:
             continue
-        label = "Lower High" if bias == "Bearish" else "Higher High"
+        is_latest_lower = (
+            len(swings_high) >= 2
+            and swings_high["Swing_High"].iloc[-1] < swings_high["Swing_High"].iloc[-2]
+        )
+        label = "Lower High" if is_latest_lower else "Higher High"
         ax.annotate("", xy=(pos, row["Swing_High"]), xytext=(pos, row["Swing_High"] + (atr_val or 1) * 1.8),
                     arrowprops=dict(arrowstyle="-|>", color="#d32f2f", lw=2))
         ax.annotate(label, xy=(pos, row["Swing_High"] + (atr_val or 1) * 2.0),
@@ -284,7 +325,11 @@ def create_chart(df, filename="xauusd_chart.png"):
         pos = df.index.get_loc(idx) - offset_start
         if pos < 0:
             continue
-        label = "Higher Low" if bias == "Bullish" else "Lower Low"
+        is_latest_higher = (
+            len(swings_low) >= 2
+            and swings_low["Swing_Low"].iloc[-1] > swings_low["Swing_Low"].iloc[-2]
+        )
+        label = "Higher Low" if is_latest_higher else "Lower Low"
         ax.annotate("", xy=(pos, row["Swing_Low"]), xytext=(pos, row["Swing_Low"] - (atr_val or 1) * 1.8),
                     arrowprops=dict(arrowstyle="-|>", color="#2e7d32", lw=2))
         ax.annotate(label, xy=(pos, row["Swing_Low"] - (atr_val or 1) * 2.0),
@@ -299,29 +344,45 @@ def create_chart(df, filename="xauusd_chart.png"):
             ax.annotate(break_kind, xy=((bx + last_x) / 2, break_level), fontsize=9, fontweight="bold",
                         color=col, ha="center", va="bottom")
 
-    # --- multiple order-block zones ---
-    swings_for_ob = swings_low if bias == "Bullish" else swings_high
-    zones = find_order_blocks_multi(df, bias, swings_for_ob, lookback=OB_LOOKBACK, max_zones=3)
-    zone_color = "#26a69a" if bias == "Bullish" else "#ef5350"
-    for i, ob in enumerate(zones):
-        rect = plt.Rectangle((0, ob["low"]), last_x, ob["high"] - ob["low"],
-                              facecolor=zone_color + "22", edgecolor=zone_color, linewidth=0.8, zorder=1)
+    # --- multiple order-block zones (only meaningful for a real
+    # Bullish/Bearish bias — a Neutral/range read has no directional
+    # break to draw a zone from) ---
+    zones = []
+    if bias in ("Bullish", "Bearish"):
+        swings_for_ob = swings_low if bias == "Bullish" else swings_high
+        zones = find_order_blocks_multi(df, bias, swings_for_ob, lookback=OB_LOOKBACK, max_zones=3)
+        zone_color = "#26a69a" if bias == "Bullish" else "#ef5350"
+        for i, ob in enumerate(zones):
+            rect = plt.Rectangle((0, ob["low"]), last_x, ob["high"] - ob["low"],
+                                  facecolor=zone_color + "22", edgecolor=zone_color, linewidth=0.8, zorder=1)
+            ax.add_patch(rect)
+            if i == 0:
+                ax.annotate("Order Block / Re-Sweep Zone", xy=(last_x * 0.15, (ob["high"] + ob["low"]) / 2),
+                            color=zone_color, fontsize=8, fontweight="bold",
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=zone_color, alpha=0.9))
+    elif len(swings_high) >= 1 and len(swings_low) >= 1:
+        # Range: shade the box between the most recent swing high and
+        # swing low instead of a directional order block.
+        range_hi = swings_high["Swing_High"].iloc[-1]
+        range_lo = swings_low["Swing_Low"].iloc[-1]
+        rect = plt.Rectangle((0, range_lo), last_x, range_hi - range_lo,
+                              facecolor="#9e9e9e22", edgecolor="#616161", linewidth=0.8, zorder=1)
         ax.add_patch(rect)
-        if i == 0:
-            ax.annotate("Order Block / Re-Sweep Zone", xy=(last_x * 0.15, (ob["high"] + ob["low"]) / 2),
-                        color=zone_color, fontsize=8, fontweight="bold",
-                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=zone_color, alpha=0.9))
+        ax.annotate("Range — awaiting breakout", xy=(last_x * 0.15, (range_hi + range_lo) / 2),
+                    color="#616161", fontsize=8, fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#616161", alpha=0.9))
 
     # --- current price badge ---
     last_price = df["Close"].iloc[-1]
-    badge_color = "#26a69a" if bias == "Bullish" else "#ef5350"
+    badge_color = "#26a69a" if bias == "Bullish" else ("#ef5350" if bias == "Bearish" else "#616161")
     ax.annotate(f"{last_price:,.2f}", xy=(last_x, last_price), xytext=(12, 0), textcoords="offset points",
                 fontsize=10, fontweight="bold", color="white", va="center",
                 bbox=dict(boxstyle="round,pad=0.4", facecolor=badge_color, edgecolor="none"))
 
-    # --- ATR-based projected target (computed, not hand-drawn) ---
+    # --- ATR-based projected target (only meaningful with a directional
+    # bias — a range has no "direction" to project toward) ---
     target = None
-    if atr_val:
+    if atr_val and bias in ("Bullish", "Bearish"):
         direction = 1 if bias == "Bullish" else -1
         target = last_price + direction * PROJECTION_ATR_MULT * atr_val
         mid_x = last_x + (len(plot_df) * 0.15)
@@ -339,8 +400,50 @@ def create_chart(df, filename="xauusd_chart.png"):
 
 
 # ================== MESSAGE ==================
-def create_message(price, structure_notes, bias, break_kind, displacement_hit, order_block, target):
+def create_message(price, structure_notes, bias, break_kind, displacement_hit, order_block, target,
+                    swings_high=None, swings_low=None):
     date_str = datetime.now().strftime("%B %d").upper()
+
+    if bias == "Neutral":
+        # A genuine contracting/expanding range: highs and lows disagree,
+        # so there's no trend to call. Say what the range actually is and
+        # what would need to happen to break it, instead of forcing a
+        # directional narrative onto data that doesn't support one.
+        range_hi = swings_high["Swing_High"].iloc[-1] if swings_high is not None and len(swings_high) >= 1 else None
+        range_lo = swings_low["Swing_Low"].iloc[-1] if swings_low is not None and len(swings_low) >= 1 else None
+
+        notes_text = "\n".join([f"• {note}" for note in structure_notes]) if structure_notes else "• Structure developing"
+
+        if range_hi is not None and range_lo is not None:
+            range_line = (
+                f"Price is consolidating between <b>{range_lo:,.2f}</b> and <b>{range_hi:,.2f}</b> — "
+                "no clear directional break yet.\n"
+            )
+            watch_line = (
+                f"\nWatch for a confirmed break above <b>{range_hi:,.2f}</b> (bullish) "
+                f"or below <b>{range_lo:,.2f}</b> (bearish) to establish the next trend.\n"
+            )
+        else:
+            range_line = "Structure is still forming — not enough confirmed swings yet for a range read.\n"
+            watch_line = ""
+
+        return f"""XAUUSD {INTERVAL.upper()} Setup — Intraday
+
+📌 <b>MARKET UPDATE – {date_str}</b>
+
+— {PAIR.replace('/', '')} / {INTERVAL.upper()} —
+
+🔥 <b>TRADING PLAN</b>
+
+XAUUSD is trading around <b>{price:,.2f}</b>.
+
+<b>Structure:</b>
+{notes_text}
+
+{range_line}{watch_line}
+<b>Bias:</b> Neutral — no trade bias until price breaks the range.
+"""
+
     notes_text = "\n".join([f"• {note}" for note in structure_notes]) if structure_notes else "• Structure developing"
 
     break_line = ""
@@ -397,7 +500,12 @@ if __name__ == "__main__":
     try:
         df, price = get_live_data()
         chart_file, notes, bias, break_kind, displacement_hit, order_block, target = create_chart(df)
-        caption = create_message(price, notes, bias, break_kind, displacement_hit, order_block, target)
+        # analyze_structure_deep also gives us swings_high/swings_low —
+        # recompute once here (cheap) so create_message can build the
+        # range line on a Neutral read.
+        (_, _, _, _, _, swings_high, swings_low, _, _, _) = analyze_structure_deep(df)
+        caption = create_message(price, notes, bias, break_kind, displacement_hit, order_block, target,
+                                  swings_high=swings_high, swings_low=swings_low)
         result = send_telegram_photo(chart_file, caption)
 
         if result.get("ok"):
