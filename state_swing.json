@@ -19,64 +19,84 @@
       "fetched_at": "2026-09-24T07:45:24.829262+00:00"
     },
     "setup": {
-      "bos_level": 4333.50667,
-      "pullback_zone": 4370.1704,
+      "bos_level": 4274.05223,
+      "pullback_zone": 4304.10576,
       "confirmed": false,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
         {
-          "high": 4364.90615,
-          "low": 4358.78008,
+          "high": 4299.59584,
+          "low": 4283.81821,
           "type": "order_block"
         },
         {
-          "high": 4365.59912,
-          "low": 4359.21739,
+          "high": 4292.95097,
+          "low": 4285.22455,
           "type": "order_block"
         },
         {
-          "high": 4361.47941,
-          "low": 4354.26263,
+          "high": 4294.24142,
+          "low": 4284.58277,
           "type": "order_block"
         }
       ],
-      "liquidity_ok": true,
+      "liquidity_ok": false,
       "sr_ok": true
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "zones": [],
-      "liquidity_ok": true,
+      "bos": [
+        4274.05223,
+        4304.10576,
+        142
+      ],
+      "zones": [
+        {
+          "high": 4299.59584,
+          "low": 4283.81821,
+          "type": "order_block"
+        },
+        {
+          "high": 4292.95097,
+          "low": 4285.22455,
+          "type": "order_block"
+        },
+        {
+          "high": 4294.24142,
+          "low": 4284.58277,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 14.560931990974765,
+      "displacement_hit": true,
+      "atr": 14.999827705260497,
       "structure_seq": "Lower Highs, Higher Lows",
       "liquidity_zone": 4272.38946,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-24T09:10:20.982209+00:00"
+      "fetched_at": "2026-09-24T10:00:26.506317+00:00"
     },
     "order_blocks": [
       {
-        "top": 4364.90615,
-        "bot": 4358.78008,
+        "top": 4299.59584,
+        "bot": 4283.81821,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4365.59912,
-        "bot": 4359.21739,
+        "top": 4292.95097,
+        "bot": 4285.22455,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4361.47941,
-        "bot": 4354.26263,
+        "top": 4294.24142,
+        "bot": 4284.58277,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
@@ -85,7 +105,7 @@
     ],
     "last_market_update": {
       "bias": "bearish",
-      "bos_level": 4333.50667
+      "bos_level": 4274.05223
     }
   }
 }
