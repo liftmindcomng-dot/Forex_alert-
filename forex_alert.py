@@ -566,15 +566,37 @@ def liquidity_swept_before_break(pools, bias, bos_index, lookback_bars):
 
 def structure_sequence_label(swings):
     """Human-readable trailing swing sequence for the market-update
-    narrative, e.g. 'Lower Highs, Lower Lows' or 'Higher Highs'."""
+    narrative. If highs and lows agree on direction, describes it as a
+    clean trend (e.g. 'Lower Highs, Lower Lows'). If they disagree (a
+    contracting or expanding range rather than a real trend), says so
+    explicitly instead of implying a directional story that isn't
+    there — this used to silently print e.g. 'Lower Highs, Higher Lows'
+    next to a bearish-BOS narrative, describing a range as if it were a
+    trend."""
     highs = last_two(swings, "high")
     lows = last_two(swings, "low")
-    parts = []
+
+    high_dir = None
+    low_dir = None
     if highs:
-        parts.append("Lower Highs" if highs[-1]["price"] < highs[-2]["price"] else "Higher Highs")
+        high_dir = "lower" if highs[-1]["price"] < highs[-2]["price"] else "higher"
     if lows:
-        parts.append("Lower Lows" if lows[-1]["price"] < lows[-2]["price"] else "Higher Lows")
-    return ", ".join(parts) if parts else "no clear swing sequence"
+        low_dir = "lower" if lows[-1]["price"] < lows[-2]["price"] else "higher"
+
+    if high_dir and low_dir:
+        if high_dir == "lower" and low_dir == "lower":
+            return "Lower Highs, Lower Lows"
+        if high_dir == "higher" and low_dir == "higher":
+            return "Higher Highs, Higher Lows"
+        if high_dir == "lower" and low_dir == "higher":
+            return "a contracting range (Lower Highs, Higher Lows)"
+        return "an expanding range (Higher Highs, Lower Lows)"
+
+    if high_dir:
+        return "Lower Highs" if high_dir == "lower" else "Higher Highs"
+    if low_dir:
+        return "Lower Lows" if low_dir == "lower" else "Higher Lows"
+    return "no clear swing sequence"
 
 
 def nearest_liquidity_level(pools, swings, bias, fallback_price):
@@ -594,13 +616,19 @@ def nearest_liquidity_level(pools, swings, bias, fallback_price):
 
 
 def build_market_update_message(pair, bias, structure_seq, displacement_hit,
-                                 liquidity_zone, atr_val, decimals):
+                                 liquidity_zone, atr_val, decimals, is_choch=False):
     """Narrative-style structure summary in the '📌 MARKET UPDATE / 🔥
     TRADING PLAN' format used by public gold/forex channels — separate
     from the BUY/SELL trade alert. Describes where price sits relative
     to the nearest liquidity zone and what a sweep + rejection there
-    would imply, rather than a specific entry/SL/TP."""
-    bos_word = "bearish BOS" if bias == "bearish" else "bullish BOS"
+    would imply, rather than a specific entry/SL/TP.
+
+    `is_choch` now controls whether the break is described as a CHoCH
+    (reversal) or a BOS (continuation) — previously this always said
+    "BOS" regardless of the actual break type, so a genuine reversal was
+    misreported as trend continuation."""
+    break_word = "CHoCH" if is_choch else "BOS"
+    bos_word = f"bearish {break_word}" if bias == "bearish" else f"bullish {break_word}"
     disp_word = f"clear {bias} displacement" if displacement_hit else f"a mild {bias} push (no strong displacement)"
     rejection_word = "bullish rejection" if bias == "bearish" else "bearish rejection"
     move_word = "recover toward" if bias == "bearish" else "drop toward"
@@ -1394,6 +1422,7 @@ def process_pair(pair, state):
                 decimals = 3 if "JPY" in pair else (2 if "XAU" in pair else 5)
                 update_msg = build_market_update_message(
                     pair, bias, structure_seq, displacement_hit, liquidity_zone, atr_s, decimals,
+                    is_choch=bias_flipped,
                 )
                 lo_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[0]
                 hi_mult = MARKET_UPDATE_TARGET_ATR_MULTIPLES[-1]
