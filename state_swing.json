@@ -93,7 +93,7 @@
         "bot": 4285.22455,
         "type": "breaker_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
