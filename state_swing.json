@@ -51,11 +51,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 15.26196602386392,
+      "atr": 16.086380528524447,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4244.25952,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-25T00:35:23.481471+00:00"
+      "fetched_at": "2026-09-25T01:30:21.910729+00:00"
     },
     "order_blocks": [
       {
@@ -71,7 +71,7 @@
         "bot": 4285.22455,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -87,7 +87,25 @@
       "bias": "bearish",
       "bos_level": 4274.05223
     },
-    "breaker_blocks": [],
-    "mitigation_blocks": []
+    "breaker_blocks": [
+      {
+        "top": 4292.95097,
+        "bot": 4285.22455,
+        "type": "breaker_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
+      }
+    ],
+    "mitigation_blocks": [
+      {
+        "top": 4292.95097,
+        "bot": 4285.22455,
+        "type": "mitigation_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      }
+    ]
   }
 }
