@@ -1855,7 +1855,7 @@ def process_pair(pair, state):
     emoji = "🟢" if signal == "BUY" else "🔴"
     mode_desc = {
         "retest": "breakout + retest",
-        "structure": f"{confirmation.get('zone_type', 'order_block')} + engulfing/rejection/FVG (session-filtered)",
+        "structure": f"{confirmation.get('zone_type', 'order_block').replace('_', ' ')} + engulfing/rejection/FVG (session-filtered)",
         "retest_or_pullback": f"retest+pullback mode ({confirmation.get('trigger')} fired)",
         "pullback": "deep pullback (50-79% retrace)" if SWING_ENTRY_MODE else "pullback",
     }.get(ENTRY_MODE, ENTRY_MODE)
