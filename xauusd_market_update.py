@@ -5,7 +5,10 @@ Separate from forex_alert.py by design — this is a simpler, single-purpose
 script that posts a narrative structure chart on a plain schedule, with no
 state file and no "only on fresh break" gating (see the workflow's cron:
 it fires every run, on purpose, for a steady drumbeat of updates rather
-than a rarer event-driven post).
+than a rarer event-driven post) — EXCEPT on weekends, when the forex
+market is closed. is_forex_market_open() below mirrors forex_alert.py's
+own weekend guard exactly, so both scripts agree on when to go quiet
+rather than posting stale-data updates while the market isn't trading.
 
 Feed: Twelve Data's XAU/USD SPOT feed (TWELVE_DATA_API_KEY), matching
 forex_alert.py's price source exactly.
@@ -40,7 +43,7 @@ import mplfinance as mpf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -57,6 +60,23 @@ OB_LOOKBACK = int(os.getenv("OB_LOOKBACK", "15"))
 DISPLACEMENT_ATR_MULT = float(os.getenv("DISPLACEMENT_ATR_MULT", "1.0"))
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
 PROJECTION_ATR_MULT = float(os.getenv("PROJECTION_ATR_MULT", "2.0"))
+
+
+# ================== MARKET HOURS ==================
+def is_forex_market_open():
+    """Same weekend rule forex_alert.py uses: closed all day Saturday,
+    closed Friday from 22:00 UTC, closed Sunday until 22:00 UTC. Keeps
+    this poster from firing a "fresh" structure update off Friday's
+    stale closing candle all weekend."""
+    now = datetime.now(timezone.utc)
+    weekday, hour = now.weekday(), now.hour
+    if weekday == 5:
+        return False
+    if weekday == 4 and hour >= 22:
+        return False
+    if weekday == 6 and hour < 22:
+        return False
+    return True
 
 
 # ================== LIVE DATA (Twelve Data, spot XAU/USD) ==================
@@ -497,24 +517,27 @@ def send_telegram_photo(photo_path, caption):
 
 # ================== MAIN ==================
 if __name__ == "__main__":
-    try:
-        df, price = get_live_data()
-        chart_file, notes, bias, break_kind, displacement_hit, order_block, target = create_chart(df)
-        # analyze_structure_deep also gives us swings_high/swings_low —
-        # recompute once here (cheap) so create_message can build the
-        # range line on a Neutral read.
-        (_, _, _, _, _, swings_high, swings_low, _, _, _) = analyze_structure_deep(df)
-        caption = create_message(price, notes, bias, break_kind, displacement_hit, order_block, target,
-                                  swings_high=swings_high, swings_low=swings_low)
-        result = send_telegram_photo(chart_file, caption)
+    if not is_forex_market_open():
+        print("Forex market is closed (weekend) — skipping this run to avoid posting a stale-data update.")
+    else:
+        try:
+            df, price = get_live_data()
+            chart_file, notes, bias, break_kind, displacement_hit, order_block, target = create_chart(df)
+            # analyze_structure_deep also gives us swings_high/swings_low —
+            # recompute once here (cheap) so create_message can build the
+            # range line on a Neutral read.
+            (_, _, _, _, _, swings_high, swings_low, _, _, _) = analyze_structure_deep(df)
+            caption = create_message(price, notes, bias, break_kind, displacement_hit, order_block, target,
+                                      swings_high=swings_high, swings_low=swings_low)
+            result = send_telegram_photo(chart_file, caption)
 
-        if result.get("ok"):
-            print("Update sent successfully")
-        else:
-            print("Error:", result)
+            if result.get("ok"):
+                print("Update sent successfully")
+            else:
+                print("Error:", result)
 
-        if os.path.exists(chart_file):
-            os.remove(chart_file)
+            if os.path.exists(chart_file):
+                os.remove(chart_file)
 
-    except Exception as e:
-        print("Error:", str(e))
+        except Exception as e:
+            print("Error:", str(e))
