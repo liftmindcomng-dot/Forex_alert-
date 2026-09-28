@@ -15,22 +15,22 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": null,
-      "fetched_at": "2026-09-28T01:55:20.457590+00:00"
+      "bias": "bullish",
+      "fetched_at": "2026-09-28T05:45:23.780101+00:00"
     },
     "setup": null,
-    "bias": "bearish",
+    "bias": "bullish",
     "structure_cache": {
       "bos": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 15.39687492507498,
-      "structure_seq": "Lower Highs, Lower Lows",
-      "liquidity_zone": 4256.04396,
-      "bias_at_fetch": "bearish",
-      "fetched_at": "2026-09-25T18:10:23.526450+00:00"
+      "atr": 8.54817808612887,
+      "structure_seq": "an expanding range (Higher Highs, Lower Lows)",
+      "liquidity_zone": 4286.3660075,
+      "bias_at_fetch": "bullish",
+      "fetched_at": "2026-09-28T05:45:23.780101+00:00"
     },
     "order_blocks": [
       {
@@ -80,23 +80,6 @@
         "is_choch": false
       }
     ],
-    "mitigation_blocks": [
-      {
-        "top": 4292.95097,
-        "bot": 4285.22455,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4294.24142,
-        "bot": 4284.58277,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      }
-    ]
+    "mitigation_blocks": []
   }
 }
