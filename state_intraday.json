@@ -32,20 +32,16 @@
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": [
-        4126.68397,
-        4113.53353,
-        144
-      ],
+      "bos": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 5.340855571466888,
+      "atr": 5.475096751095657,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 4126.888275,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-09-28T23:35:18.910978+00:00"
+      "fetched_at": "2026-09-28T23:50:24.943974+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
