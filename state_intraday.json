@@ -37,11 +37,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 3.7461818538418243,
+      "atr": 3.794119932735761,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 4145.507305,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-05T23:55:16.870028+00:00"
+      "fetched_at": "2026-10-06T00:10:24.188471+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
