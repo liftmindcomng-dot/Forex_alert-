@@ -815,7 +815,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     def in_view(p):
         return view_lo <= p <= view_hi
 
-    # --- key levels (PDH/PDL, Asia, EQH/EQL) ---
+    # --- key levels (PDH/PDL, Asia, EQH/EQL): labels sit just ABOVE their line ---
     for lv in a["key_levels"]:
         if not in_view(lv["price"]):
             continue
@@ -823,12 +823,13 @@ def create_chart(df, a, filename="xauusd_chart.png"):
         ax.text(0.005, lv["price"], lv["name"], transform=ax.get_yaxis_transform(),
                 fontsize=7, fontweight="bold", color="#37474f", va="bottom", ha="left")
 
-    # --- premium / discount equilibrium line ---
+    # --- premium / discount equilibrium line: label sits just BELOW its line
+    # so it can't collide with a key-level label at a nearby price ---
     pdi = a["pd"]
     if pdi and in_view(pdi["eq"]):
         ax.axhline(pdi["eq"], linestyle=":", linewidth=1.0, color="#8e24aa", alpha=0.8, zorder=1)
         ax.text(0.005, pdi["eq"], "EQ 50%", transform=ax.get_yaxis_transform(),
-                fontsize=7, fontweight="bold", color="#8e24aa", va="bottom", ha="left")
+                fontsize=7, fontweight="bold", color="#8e24aa", va="top", ha="left")
 
     # --- fair value gaps ---
     for f in a["fvgs"]:
@@ -915,10 +916,11 @@ def create_chart(df, a, filename="xauusd_chart.png"):
                 transform=ax.get_yaxis_transform(), fontsize=7, fontweight="bold",
                 color="#b71c1c", va="bottom", ha="right")
 
-    # --- phase badge ---
+    # --- phase badge: sits just ABOVE the plot area (outside it), so it never
+    # covers level labels or candles ---
     phase_color = PHASE_COLORS.get(phase, "#616161")
-    ax.text(0.01, 0.98, f"PHASE: {phase.upper()}", transform=ax.transAxes, fontsize=10,
-            fontweight="bold", color="white", va="top", ha="left",
+    ax.text(0.0, 1.012, f"PHASE: {phase.upper()}", transform=ax.transAxes, fontsize=10,
+            fontweight="bold", color="white", va="bottom", ha="left",
             bbox=dict(boxstyle="round,pad=0.4", facecolor=phase_color, edgecolor="none"))
 
     # --- current price badge ---
