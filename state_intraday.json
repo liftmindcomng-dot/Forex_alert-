@@ -21,9 +21,14 @@
     "setup": {
       "bos_level": 4193.89279,
       "pullback_zone": 4179.61041,
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
-      "displacement_hit": false
+      "displacement_hit": false,
+      "last_entry_bar_time": "2026-10-09 17:45:00",
+      "duration_class": "day",
+      "condition_label": "BOS+RETEST",
+      "confirmed_at": "2026-10-09T17:50:34.914774+00:00",
+      "notified": false
     },
     "bias": "bullish",
     "structure_cache": {
