@@ -9,7 +9,8 @@ Feed: Twelve Data XAU/USD spot (TWELVE_DATA_API_KEY).
 What it does each run:
   1. Fetches the main timeframe (default 30min) AND a higher timeframe
      (default 4h) with retries, and skips the post if the last candle is stale.
-  2. Structure: swings, BOS vs CHoCH, displacement, order blocks.
+  2. Structure: swings, BOS vs CHoCH (one shared scan for chart AND message),
+     displacement, order blocks.
   3. Market phase: Continuation / Reversal / Pullback / Trend Leg /
      Invalidation Risk / Potential Reversal / Range, with a confirmation
      status (displacement + retest).
@@ -54,7 +55,7 @@ HTF_INTERVAL = os.getenv("XAU_HTF_INTERVAL", "4h")
 HTF_OUTPUTSIZE = int(os.getenv("XAU_HTF_OUTPUTSIZE", "120"))
 
 SWING_LOOKBACK = int(os.getenv("SWING_LOOKBACK", "3"))
-TREND_LOOKBACK_SWINGS = int(os.getenv("TREND_LOOKBACK_SWINGS", "4"))
+BREAK_FRESH_BARS = int(os.getenv("BREAK_FRESH_BARS", "5"))       # a structure break counts as "current" for this many bars
 OB_LOOKBACK = int(os.getenv("OB_LOOKBACK", "15"))
 DISPLACEMENT_ATR_MULT = float(os.getenv("DISPLACEMENT_ATR_MULT", "1.0"))
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", "14"))
@@ -84,6 +85,7 @@ CHART_BARS = int(os.getenv("CHART_BARS", "80"))
 IMPULSE_ATR_MULT = float(os.getenv("IMPULSE_ATR_MULT", "4.0"))   # min size of an "impulse leg" box
 IMPULSE_MAX_BARS = int(os.getenv("IMPULSE_MAX_BARS", "14"))
 PROFILE_BINS = int(os.getenv("PROFILE_BINS", "40"))
+MAX_TARGET_ATR = float(os.getenv("MAX_TARGET_ATR", "8"))         # ignore "price range" levels farther than this
 
 # repeat-skipping
 SKIP_REPEATS = os.getenv("SKIP_REPEATS", "true").lower() == "true"
@@ -269,16 +271,25 @@ def find_order_blocks_multi(df, bias, swings, lookback=OB_LOOKBACK, max_zones=3)
     return zones
 
 
-def analyze_structure_deep(df):
-    """Bias needs the last-two swing highs AND last-two swing lows to agree
-    (both lower = Bearish, both higher = Bullish); disagreement = Neutral
-    range. BOS vs CHoCH compares the latest break against the trend implied
-    by earlier swings. Displacement: breaking candle range >=
-    DISPLACEMENT_ATR_MULT x ATR.
+def analyze_structure_deep(df, use_events=True):
+    """Swing bias needs the last-two swing highs AND last-two swing lows to
+    agree (both lower = Bearish, both higher = Bullish); disagreement =
+    Neutral range.
+
+    Breaks of structure come from detect_structure_events(), the same scan
+    the chart draws, so the message and the chart always agree. A break is
+    "current" when it happened within BREAK_FRESH_BARS bars and price is
+    still beyond the broken level. A current break sets the bias to its
+    direction (a CHoCH flips it, a BOS keeps it). Displacement: the breaking
+    candle's range >= DISPLACEMENT_ATR_MULT x ATR. Pass use_events=False for
+    a pure swing read (used for the higher timeframe).
 
     Returns (structure_notes, bias, break_kind, break_index, break_level,
-    swings_high, swings_low, order_block, displacement_hit, atr_val).
+    swings_high, swings_low, order_block, displacement_hit, atr_val,
+    break_pos). break_index = bar of the broken swing, break_pos = bar that
+    broke it.
     """
+    raw = df
     df = detect_swings(df)
     swings_high_all = df[df["Swing_High"].notna()][["Swing_High"]]
     swings_low_all = df[df["Swing_Low"].notna()][["Swing_Low"]]
@@ -323,51 +334,35 @@ def analyze_structure_deep(df):
         bias = "Bullish" if low_dir == "higher" else "Bearish"
         structure_notes.append("Higher Low" if low_dir == "higher" else "Lower Low")
 
-    # prior trend from a longer swing lookback, to decide BOS vs CHoCH
-    prior_bias = "Neutral"
-    hh_prior = swings_high_all.tail(TREND_LOOKBACK_SWINGS + 1)
-    ll_prior = swings_low_all.tail(TREND_LOOKBACK_SWINGS + 1)
-    if len(hh_prior) >= TREND_LOOKBACK_SWINGS and len(ll_prior) >= TREND_LOOKBACK_SWINGS:
-        hh_excl_latest = hh_prior.iloc[:-1] if len(hh_prior) > TREND_LOOKBACK_SWINGS else hh_prior
-        ll_excl_latest = ll_prior.iloc[:-1] if len(ll_prior) > TREND_LOOKBACK_SWINGS else ll_prior
-        if len(hh_excl_latest) >= 2 and hh_excl_latest["Swing_High"].iloc[-1] > hh_excl_latest["Swing_High"].iloc[-2]:
-            prior_bias = "Bullish"
-        elif len(hh_excl_latest) >= 2:
-            prior_bias = "Bearish"
-        if prior_bias == "Neutral" and len(ll_excl_latest) >= 2:
-            prior_bias = "Bullish" if ll_excl_latest["Swing_Low"].iloc[-1] > ll_excl_latest["Swing_Low"].iloc[-2] else "Bearish"
-
     break_kind = None
     break_index = None
     break_level = None
+    break_pos = None
     order_block = None
     displacement_hit = False
 
-    if bias in ("Bullish", "Bearish") and (len(swings_high) >= 1 or len(swings_low) >= 1):
-        n = len(df)
-        last_close = df["Close"].iloc[-1]
-        if bias == "Bullish" and len(swings_high) >= 1:
-            break_level = swings_high["Swing_High"].iloc[-1]
-            break_index = df.index.get_loc(swings_high.index[-1])
-        elif bias == "Bearish" and len(swings_low) >= 1:
-            break_level = swings_low["Swing_Low"].iloc[-1]
-            break_index = df.index.get_loc(swings_low.index[-1])
-
-        if break_level is not None:
-            broke = (last_close > break_level) if bias == "Bullish" else (last_close < break_level)
-            if broke:
-                last_range = df["High"].iloc[-1] - df["Low"].iloc[-1]
-                displacement_hit = bool(atr_val) and last_range >= DISPLACEMENT_ATR_MULT * atr_val
-                break_kind = "CHoCH" if bias != prior_bias and prior_bias != "Neutral" else "BOS"
-                order_block = find_order_block(df, bias, before_idx=n - 1, lookback=OB_LOOKBACK)
-                structure_notes.append(
-                    f"{break_kind} confirmed" + (" with displacement" if displacement_hit else " (no displacement)")
-                )
-            else:
-                break_level = None
+    if use_events:
+        n = len(raw)
+        last_close = float(raw["Close"].iloc[-1])
+        fresh = [e for e in detect_structure_events(raw)
+                 if e["kind"] and e["to_pos"] >= n - BREAK_FRESH_BARS
+                 and ((e["dir"] == "bull" and last_close > e["level"])
+                      or (e["dir"] == "bear" and last_close < e["level"]))]
+        if fresh:
+            e = fresh[-1]
+            bias = "Bullish" if e["dir"] == "bull" else "Bearish"
+            break_kind, break_level = e["kind"], e["level"]
+            break_index, break_pos = e["from_pos"], e["to_pos"]
+            brk_range = float(raw["High"].iloc[break_pos] - raw["Low"].iloc[break_pos])
+            displacement_hit = bool(atr_val) and brk_range >= DISPLACEMENT_ATR_MULT * atr_val
+            order_block = find_order_block(raw, bias, before_idx=break_pos, lookback=OB_LOOKBACK)
+            structure_notes.append(
+                f"{break_kind} ({bias.lower()}) confirmed"
+                + (" with displacement" if displacement_hit else " (no displacement)")
+            )
 
     return (structure_notes, bias, break_kind, break_index, break_level,
-            swings_high, swings_low, order_block, displacement_hit, atr_val)
+            swings_high, swings_low, order_block, displacement_hit, atr_val, break_pos)
 
 
 # ================== HIGHER TIMEFRAME ==================
@@ -376,7 +371,7 @@ def get_htf_context():
     post still goes out, just without the HTF line)."""
     try:
         htf_df = fetch_candles(PAIR, HTF_INTERVAL, HTF_OUTPUTSIZE)
-        res = analyze_structure_deep(htf_df)
+        res = analyze_structure_deep(htf_df, use_events=False)
         return {"bias": res[1], "interval": HTF_INTERVAL.upper(), "notes": res[0]}
     except Exception as e:
         print("HTF fetch failed (continuing without it):", e)
@@ -560,14 +555,14 @@ def premium_discount(price, swings_high, swings_low):
     return {"hi": hi, "lo": lo, "eq": (hi + lo) / 2, "pct": pct, "label": label}
 
 
-# ================== STRUCTURE EVENTS / IMPULSE LEGS (chart) ==================
+# ================== STRUCTURE EVENTS / IMPULSE LEGS ==================
 def detect_structure_events(df, left=SWING_LOOKBACK, right=SWING_LOOKBACK):
     """Walks the whole window bar by bar and records every structure break:
     a close beyond the latest confirmed, not-yet-broken swing. A break in the
     direction of the current trend is a BOS, a break against it is a CHoCH.
     The very first break (no trend known yet) is recorded with kind None and
     isn't labeled. Returns a list of dicts: kind, dir ("bull"/"bear"),
-    level, from_pos, to_pos."""
+    level, from_pos, to_pos. Used by BOTH the analysis (message) and the chart."""
     d = detect_swings(df, left, right)
     highs = d["Swing_High"].values
     lows = d["Swing_Low"].values
@@ -650,7 +645,7 @@ def volume_profile(plot_df, bins=PROFILE_BINS):
 
 # ================== PHASE CLASSIFICATION ==================
 def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
-                   displacement_hit, atr_val, levels):
+                   displacement_hit, atr_val, levels, break_pos=None):
     """Returns phase, confirmation text, retracement depth and sweep info."""
     close = df["Close"].iloc[-1]
     a = atr_val or 0.0
@@ -659,14 +654,16 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
     sweep = detect_liquidity_sweep(df, levels)
 
     retest_held = False
-    if break_kind and break_level is not None and len(df) > RETEST_WINDOW + 1:
-        recent = df.iloc[-RETEST_WINDOW - 1:-1]
-        if bias == "Bullish":
-            touched = (recent["Low"] <= break_level + tol) & (recent["Close"] >= break_level)
-            retest_held = bool(touched.any() and close > break_level)
-        elif bias == "Bearish":
-            touched = (recent["High"] >= break_level - tol) & (recent["Close"] <= break_level)
-            retest_held = bool(touched.any() and close < break_level)
+    if break_kind and break_level is not None and break_pos is not None:
+        # bars after the break candle (excluding the latest bar) that came back to the level
+        recent = df.iloc[max(break_pos + 1, len(df) - 1 - RETEST_WINDOW):-1]
+        if len(recent):
+            if bias == "Bullish":
+                touched = (recent["Low"] <= break_level + tol) & (recent["Close"] >= break_level)
+                retest_held = bool(touched.any() and close > break_level)
+            elif bias == "Bearish":
+                touched = (recent["High"] >= break_level - tol) & (recent["Close"] <= break_level)
+                retest_held = bool(touched.any() and close < break_level)
 
     depth = None
     depth_label = None
@@ -845,14 +842,16 @@ def build_projection(a, price):
             s_level, _, s_name = max(sweeps, key=lambda p: p[0])
         else:
             s_level, s_name = price - atr_val, "ATR estimate"
-        targets = sorted({round(p[0], 2) for p in pool if p[1] in ("high", "eq") and p[0] > price + atr_val})
+        targets = sorted({round(p[0], 2) for p in pool
+                          if p[1] in ("high", "eq") and price + atr_val < p[0] <= price + MAX_TARGET_ATR * atr_val})
     else:
         sweeps = [p for p in pool if p[1] == "high" and p[0] >= price - 0.3 * atr_val]
         if sweeps:
             s_level, _, s_name = min(sweeps, key=lambda p: p[0])
         else:
             s_level, s_name = price + atr_val, "ATR estimate"
-        targets = sorted({round(p[0], 2) for p in pool if p[1] in ("low", "eq") and p[0] < price - atr_val},
+        targets = sorted({round(p[0], 2) for p in pool
+                          if p[1] in ("low", "eq") and price - MAX_TARGET_ATR * atr_val <= p[0] < price - atr_val},
                          reverse=True)
 
     if targets:
@@ -870,11 +869,11 @@ def full_analysis(df, htf):
     """Runs everything once and returns one dict that both the chart and
     the message use, so they always agree."""
     (notes, bias, break_kind, break_index, break_level, swings_high,
-     swings_low, order_block, displacement_hit, atr_val) = analyze_structure_deep(df)
+     swings_low, order_block, displacement_hit, atr_val, break_pos) = analyze_structure_deep(df)
 
     levels, key_levels = build_levels(df, swings_high, swings_low, atr_val)
     ph = classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
-                        displacement_hit, atr_val, levels)
+                        displacement_hit, atr_val, levels, break_pos)
 
     zones = []
     if bias in ("Bullish", "Bearish"):
@@ -908,6 +907,7 @@ def full_analysis(df, htf):
         "break_kind": break_kind,
         "break_index": break_index,
         "break_level": break_level,
+        "break_pos": break_pos,
         "swings_high": swings_high,
         "swings_low": swings_low,
         "order_block": order_block,
@@ -1061,7 +1061,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
             continue
         col = "#43a047" if leg["dir"] == 1 else "#e53935"
         ax.add_patch(plt.Rectangle((max(x0, 0), leg["lo"]), x1 - max(x0, 0), leg["hi"] - leg["lo"],
-                                   fc=col, ec=col, alpha=0.12, lw=0, zorder=0.65))
+                                   fc=col, ec=col, alpha=0.07, lw=0, zorder=0.65))
         ax.add_patch(plt.Rectangle((max(x0, 0), leg["lo"]), x1 - max(x0, 0), leg["hi"] - leg["lo"],
                                    fc="none", ec=col, lw=1.1, zorder=0.66))
 
@@ -1095,13 +1095,13 @@ def create_chart(df, a, filename="xauusd_chart.png"):
         ax.add_patch(plt.Rectangle((0, band_lo), last_x * 0.62, band_hi - band_lo,
                                    fc="#a5d6a7" if d == 1 else "#f4a6b8", ec="none", alpha=0.55, zorder=0.6))
         ax.axhline(S, color="#455a64", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
-        ax.text(last_x * 0.5, S, "Potential Liquidity Re-Sweep Zone", ha="center", va="center",
+        ax.text(last_x * 0.32, S, "Potential Liquidity Re-Sweep Zone", ha="center", va="center",
                 fontsize=11, color="#263238", zorder=6,
                 bbox=dict(boxstyle="square,pad=0.35", fc="white", ec="#e53935", lw=1.4))
         bub_col = "#66bb6a" if d == 1 else "#e57390"
         ax.annotate("Potential Retest – Another Liquidity Sweep",
-                    xy=(last_x * 0.62, S),
-                    xytext=(last_x * 0.28, S - 1.5 * atr_val if d == 1 else S + 1.5 * atr_val),
+                    xy=(last_x * 0.40, S),
+                    xytext=(last_x * 0.10, S - 1.5 * atr_val if d == 1 else S + 1.5 * atr_val),
                     ha="left", va="top" if d == 1 else "bottom", fontsize=10,
                     color="#2e5e32" if d == 1 else "#8e2440", zorder=6,
                     bbox=dict(boxstyle="round,pad=0.5", fc="#c8e6c9" if d == 1 else "#f8c9d4", ec=bub_col, lw=1.2),
@@ -1109,11 +1109,11 @@ def create_chart(df, a, filename="xauusd_chart.png"):
 
         xs0 = max(0, last_x - 0.30 * W)
         for T in (T1, T2):
-            ax.plot([xs0, last_x + 0.22 * W], [T, T], color="#37474f", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
-            ax.text(last_x + 0.235 * W, T, "Price range", ha="left", va="center",
-                    fontsize=11, color="#263238", zorder=6)
+            ax.plot([xs0, last_x + 0.17 * W], [T, T], color="#37474f", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
+            ax.text(last_x + 0.18 * W, T, "Price range", ha="left", va="center",
+                    fontsize=10, color="#263238", zorder=6)
 
-        px1, px2, px3 = last_x + 0.05 * W, last_x + 0.13 * W, last_x + 0.20 * W
+        px1, px2, px3 = last_x + 0.04 * W, last_x + 0.10 * W, last_x + 0.155 * W
         ax.plot([last_x, px1], [price, S], color="#111", lw=1.3, zorder=5)
         ax.annotate("", xy=(px2, T1), xytext=(px1, S), zorder=5,
                     arrowprops=dict(arrowstyle="-|>", color="#111", lw=1.3, mutation_scale=14))
@@ -1125,18 +1125,21 @@ def create_chart(df, a, filename="xauusd_chart.png"):
                     bbox=dict(boxstyle="round,pad=0.35", fc=col_dir, ec="none"))
 
     # ---- key levels (PDH/PDL, Asia, EQH/EQL): small labels, above their line ----
+    labeled = []
     for lv in a["key_levels"]:
         if not in_view(lv["price"]):
             continue
         ax.axhline(lv["price"], ls="-.", lw=0.7, color="#607d8b", alpha=0.6, zorder=1)
-        ax.text(0.005, lv["price"], lv["name"], transform=yt, fontsize=8, fontweight="bold",
+        near = sum(1 for p in labeled if abs(p - lv["price"]) < 0.8 * atr_val)
+        labeled.append(lv["price"])
+        ax.text(0.005 + 0.07 * near, lv["price"], lv["name"], transform=yt, fontsize=8, fontweight="bold",
                 color="#455a64", va="bottom", ha="left", zorder=6)
 
     # ---- premium/discount equilibrium: label BELOW its line ----
     pdi = a["pd"]
     if pdi and in_view(pdi["eq"]):
         ax.axhline(pdi["eq"], ls=":", lw=1.0, color="#8e24aa", alpha=0.8, zorder=1)
-        ax.text(0.005, pdi["eq"], "EQ 50%", transform=yt, fontsize=8, fontweight="bold",
+        ax.text(0.16, pdi["eq"], "EQ 50%", transform=yt, fontsize=8, fontweight="bold",
                 color="#8e24aa", va="top", ha="left", zorder=6)
 
     # ---- Strong High / Strong Low ----
@@ -1159,7 +1162,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     inv = a["invalidation"]
     if inv and in_view(inv["price"]):
         ax.axhline(inv["price"], ls=":", lw=1.3, color="#b71c1c", zorder=2)
-        ax.text(0.30, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
+        ax.text(0.60, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
                 transform=yt, fontsize=8, fontweight="bold", color="#b71c1c",
                 va="bottom" if inv["side"] == "below" else "top", ha="left", zorder=6)
 
@@ -1176,7 +1179,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     # ---- candles ----
     _draw_candles(ax, plot_df)
 
-    # ---- BOS / CHoCH along the visible history ----
+    # ---- BOS / CHoCH along the visible history (same scan the message uses) ----
     events = [e for e in detect_structure_events(df) if e["kind"] and e["to_pos"] >= offset_start][-6:]
     for e in events:
         xa = max(e["from_pos"] - offset_start, 0)
@@ -1337,7 +1340,7 @@ def create_message(a, price):
     inv = a["invalidation"]
     if inv:
         parts.append(
-            f"⚠ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
+            f"⚠️ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
             f"breaks this read.\n"
         )
 
