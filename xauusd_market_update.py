@@ -979,7 +979,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
         ys += [proj["t1"], proj["t2"], proj["sweep_level"],
                proj["sweep_level"] - 2.2 * atr_val if proj["dir"] == 1 else proj["sweep_level"] + 2.2 * atr_val]
     span = max(ys) - min(ys)
-    ylo = min(ys) - span * 0.05
+    ylo = min(ys) - span * 0.12   # extra room below for the swing-low arrows
     yhi = max(ys) + span * 0.10   # extra room on top for arrows + labels
 
     def in_view(p):
