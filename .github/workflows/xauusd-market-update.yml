@@ -26,5 +26,5 @@ jobs:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
-          XAU_INTERVAL: "15min"
+          XAU_INTERVAL: "30min"
         run: python xauusd_market_update.py
