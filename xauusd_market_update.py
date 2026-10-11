@@ -14,13 +14,17 @@ What it does each run:
      Invalidation Risk / Potential Reversal / Range, with a confirmation
      status (displacement + retest).
   4. HTF bias and whether the current read is aligned with it or counter-trend.
-  5. Fair value gaps (unfilled / partly filled), premium/discount (50% line),
-     key levels (previous day high/low, Asia range, equal highs/lows) and
-     liquidity sweeps of those levels.
-  6. Session tag, invalidation level, and an informational trade idea
-     (entry zone, stop, 1R/2R/3R).
-  7. Skips near-identical repeat posts (state file), with a heartbeat post
-     every FORCE_POST_HOURS so the channel never goes silent for too long.
+  5. Fair value gaps, premium/discount (50% line), key levels (previous day
+     high/low, Asia range, equal highs/lows) and liquidity sweeps.
+  6. Session tag, invalidation level, and an informational trade idea.
+  7. Projection: liquidity re-sweep zone + two "price range" targets.
+  8. Skips near-identical repeat posts (state file), with a heartbeat post.
+
+Chart style: TradingView-like SMC layout drawn with plain matplotlib
+(mplfinance is no longer needed): cyan gradient background, structure box,
+BOS/CHoCH lines along the whole visible history, impulse-leg boxes, supply /
+demand bands, arrow swing labels, re-sweep zone callouts, black projection
+path, price-range lines, price badges and a volume profile on the right.
 """
 
 import os
@@ -31,10 +35,11 @@ import urllib.request
 import urllib.parse
 import pandas as pd
 import numpy as np
-import mplfinance as mpf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+from matplotlib.colors import LinearSegmentedColormap
 from datetime import datetime, timezone, timedelta
 
 # ================== CONFIG ==================
@@ -62,10 +67,10 @@ RETEST_TOL_ATR_MULT = float(os.getenv("RETEST_TOL_ATR_MULT", "0.3"))
 SWEEP_WINDOW = int(os.getenv("SWEEP_WINDOW", "6"))
 
 # FVG / levels
-FVG_MIN_ATR_MULT = float(os.getenv("FVG_MIN_ATR_MULT", "0.3"))   # ignore tiny gaps
+FVG_MIN_ATR_MULT = float(os.getenv("FVG_MIN_ATR_MULT", "0.3"))
 FVG_LOOKBACK = int(os.getenv("FVG_LOOKBACK", "60"))
 FVG_MAX_ZONES = int(os.getenv("FVG_MAX_ZONES", "3"))
-EQ_TOL_ATR_MULT = float(os.getenv("EQ_TOL_ATR_MULT", "0.15"))    # how close two swings must be to count as "equal"
+EQ_TOL_ATR_MULT = float(os.getenv("EQ_TOL_ATR_MULT", "0.15"))
 ASIA_START_HOUR = int(os.getenv("ASIA_START_HOUR", "0"))         # UTC
 ASIA_END_HOUR = int(os.getenv("ASIA_END_HOUR", "7"))             # UTC
 
@@ -73,6 +78,12 @@ ASIA_END_HOUR = int(os.getenv("ASIA_END_HOUR", "7"))             # UTC
 SL_BUFFER_ATR_MULT = float(os.getenv("SL_BUFFER_ATR_MULT", "0.3"))
 MIN_RISK_ATR_MULT = float(os.getenv("MIN_RISK_ATR_MULT", "0.2"))
 MAX_RISK_ATR_MULT = float(os.getenv("MAX_RISK_ATR_MULT", "5.0"))
+
+# chart
+CHART_BARS = int(os.getenv("CHART_BARS", "80"))
+IMPULSE_ATR_MULT = float(os.getenv("IMPULSE_ATR_MULT", "4.0"))   # min size of an "impulse leg" box
+IMPULSE_MAX_BARS = int(os.getenv("IMPULSE_MAX_BARS", "14"))
+PROFILE_BINS = int(os.getenv("PROFILE_BINS", "40"))
 
 # repeat-skipping
 SKIP_REPEATS = os.getenv("SKIP_REPEATS", "true").lower() == "true"
@@ -82,7 +93,7 @@ STATE_FILE = os.getenv("XAU_STATE_FILE", "state_xau_update.json")
 # data safety
 FETCH_RETRIES = int(os.getenv("FETCH_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "3"))
-STALE_BARS = int(os.getenv("STALE_BARS", "3"))                   # skip if last candle is older than this many bars
+STALE_BARS = int(os.getenv("STALE_BARS", "3"))
 
 PHASE_COLORS = {
     "Continuation": "#2e7d32",
@@ -142,7 +153,8 @@ def current_session():
 
 # ================== LIVE DATA (Twelve Data, spot XAU/USD) ==================
 def fetch_candles(pair, interval, outputsize):
-    """Fetch candles with retries. Raises RuntimeError if every attempt fails."""
+    """Fetch candles with retries. Raises RuntimeError if every attempt fails.
+    Volume is included when the feed provides it (otherwise 0)."""
     if not TWELVE_DATA_API_KEY:
         raise RuntimeError("TWELVE_DATA_API_KEY is not set.")
 
@@ -178,6 +190,7 @@ def fetch_candles(pair, interval, outputsize):
         "High": [float(r["high"]) for r in rows],
         "Low": [float(r["low"]) for r in rows],
         "Close": [float(r["close"]) for r in rows],
+        "Volume": [float(r.get("volume") or 0) for r in rows],
     }, index=pd.to_datetime([r["datetime"] for r in rows]))
 
     df = df.dropna()
@@ -233,7 +246,8 @@ def detect_swings(df, left=SWING_LOOKBACK, right=SWING_LOOKBACK):
 
 
 def find_order_block(df, bias, before_idx, lookback=OB_LOOKBACK):
-    """Last opposite-colored candle before the impulsive breakout leg."""
+    """Last opposite-colored candle before the impulsive breakout leg.
+    Returns {"high","low","pos"} (pos = bar index of the candle) or None."""
     opens, closes = df["Open"].values, df["Close"].values
     highs, lows = df["High"].values, df["Low"].values
     start = max(0, before_idx - lookback)
@@ -241,7 +255,7 @@ def find_order_block(df, bias, before_idx, lookback=OB_LOOKBACK):
         is_bearish = closes[i] < opens[i]
         is_bullish = closes[i] > opens[i]
         if (bias == "Bullish" and is_bearish) or (bias == "Bearish" and is_bullish):
-            return {"high": highs[i], "low": lows[i]}
+            return {"high": highs[i], "low": lows[i], "pos": i}
     return None
 
 
@@ -546,6 +560,94 @@ def premium_discount(price, swings_high, swings_low):
     return {"hi": hi, "lo": lo, "eq": (hi + lo) / 2, "pct": pct, "label": label}
 
 
+# ================== STRUCTURE EVENTS / IMPULSE LEGS (chart) ==================
+def detect_structure_events(df, left=SWING_LOOKBACK, right=SWING_LOOKBACK):
+    """Walks the whole window bar by bar and records every structure break:
+    a close beyond the latest confirmed, not-yet-broken swing. A break in the
+    direction of the current trend is a BOS, a break against it is a CHoCH.
+    The very first break (no trend known yet) is recorded with kind None and
+    isn't labeled. Returns a list of dicts: kind, dir ("bull"/"bear"),
+    level, from_pos, to_pos."""
+    d = detect_swings(df, left, right)
+    highs = d["Swing_High"].values
+    lows = d["Swing_Low"].values
+    closes = df["Close"].values
+    n = len(df)
+    events = []
+    trend = None
+    cur_high = None
+    cur_low = None
+    for j in range(n):
+        k = j - right  # the swing at bar k is only confirmed once bar j has closed
+        if k >= 0:
+            if not np.isnan(highs[k]):
+                cur_high = (k, float(highs[k]))
+            if not np.isnan(lows[k]):
+                cur_low = (k, float(lows[k]))
+        if cur_high is not None and closes[j] > cur_high[1]:
+            kind = "BOS" if trend == "bull" else ("CHoCH" if trend == "bear" else None)
+            events.append({"kind": kind, "dir": "bull", "level": cur_high[1],
+                           "from_pos": cur_high[0], "to_pos": j})
+            trend = "bull"
+            cur_high = None
+        elif cur_low is not None and closes[j] < cur_low[1]:
+            kind = "BOS" if trend == "bear" else ("CHoCH" if trend == "bull" else None)
+            events.append({"kind": kind, "dir": "bear", "level": cur_low[1],
+                           "from_pos": cur_low[0], "to_pos": j})
+            trend = "bear"
+            cur_low = None
+    return events
+
+
+def find_impulse_legs(df, atr_val, max_legs=2):
+    """Big, fast swing-to-swing moves (>= IMPULSE_ATR_MULT x ATR within
+    IMPULSE_MAX_BARS bars). Returns the most recent few."""
+    if not atr_val:
+        return []
+    d = detect_swings(df)
+    pts = []
+    for i in range(len(d)):
+        h = d["Swing_High"].iloc[i]
+        l = d["Swing_Low"].iloc[i]
+        if not np.isnan(h):
+            pts.append((i, float(h), "H"))
+        if not np.isnan(l):
+            pts.append((i, float(l), "L"))
+    pts.sort(key=lambda p: p[0])
+    legs = []
+    for (i0, p0, t0), (i1, p1, t1) in zip(pts, pts[1:]):
+        if t0 == t1 or i1 == i0:
+            continue
+        if abs(p1 - p0) >= IMPULSE_ATR_MULT * atr_val and (i1 - i0) <= IMPULSE_MAX_BARS:
+            legs.append({"x0": i0, "x1": i1, "lo": min(p0, p1), "hi": max(p0, p1),
+                         "dir": 1 if t0 == "L" else -1})
+    return legs[-max_legs:]
+
+
+def volume_profile(plot_df, bins=PROFILE_BINS):
+    """Horizontal profile of where price spent its time (weighted by volume
+    when the feed has it). Returns (edges, up_weights, down_weights)."""
+    lo = float(plot_df["Low"].min())
+    hi = float(plot_df["High"].max())
+    if hi <= lo:
+        return np.array([lo, lo + 1]), np.zeros(1), np.zeros(1)
+    edges = np.linspace(lo, hi, bins + 1)
+    up = np.zeros(bins)
+    dn = np.zeros(bins)
+    has_vol = "Volume" in plot_df.columns and plot_df["Volume"].sum() > 0
+    for o, h, l, c, v in zip(plot_df["Open"].values, plot_df["High"].values, plot_df["Low"].values,
+                             plot_df["Close"].values,
+                             plot_df["Volume"].values if has_vol else np.ones(len(plot_df))):
+        i0 = int(np.clip(np.searchsorted(edges, l, side="right") - 1, 0, bins - 1))
+        i1 = int(np.clip(np.searchsorted(edges, h, side="right") - 1, 0, bins - 1))
+        share = float(v) / (i1 - i0 + 1)
+        if c >= o:
+            up[i0:i1 + 1] += share
+        else:
+            dn[i0:i1 + 1] += share
+    return edges, up, dn
+
+
 # ================== PHASE CLASSIFICATION ==================
 def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
                    displacement_hit, atr_val, levels):
@@ -708,6 +810,62 @@ def build_trade_idea(a, price):
     }
 
 
+def build_projection(a, price):
+    """Where price may go next: the nearest liquidity pool to re-sweep, then
+    two 'price range' targets beyond it (nearest levels past 1 ATR, falling
+    back to ATR multiples). Only for a directional read. Returns None when
+    there's no direction."""
+    atr_val = a["atr"]
+    if not atr_val:
+        return None
+    bias, phase = a["bias"], a["phase"]
+    if phase == "Invalidation Risk":
+        return None
+    if phase == "Potential Reversal" and a["sweep"]:
+        d = 1 if a["sweep"]["dir"] == "bullish" else -1
+    elif bias == "Bullish":
+        d = 1
+    elif bias == "Bearish":
+        d = -1
+    else:
+        return None
+
+    pool = [(k["price"], k["kind"], k["name"]) for k in a["key_levels"]]
+    for v in a["swings_high"]["Swing_High"].values:
+        pool.append((float(v), "high", "Swing High"))
+    for v in a["swings_low"]["Swing_Low"].values:
+        pool.append((float(v), "low", "Swing Low"))
+    if a["pd"]:
+        pool.append((a["pd"]["eq"], "eq", "EQ"))
+
+    if d == 1:
+        # liquidity to re-sweep sits below (or right at) price
+        sweeps = [p for p in pool if p[1] == "low" and p[0] <= price + 0.3 * atr_val]
+        if sweeps:
+            s_level, _, s_name = max(sweeps, key=lambda p: p[0])
+        else:
+            s_level, s_name = price - atr_val, "ATR estimate"
+        targets = sorted({round(p[0], 2) for p in pool if p[1] in ("high", "eq") and p[0] > price + atr_val})
+    else:
+        sweeps = [p for p in pool if p[1] == "high" and p[0] >= price - 0.3 * atr_val]
+        if sweeps:
+            s_level, _, s_name = min(sweeps, key=lambda p: p[0])
+        else:
+            s_level, s_name = price + atr_val, "ATR estimate"
+        targets = sorted({round(p[0], 2) for p in pool if p[1] in ("low", "eq") and p[0] < price - atr_val},
+                         reverse=True)
+
+    if targets:
+        t1 = targets[0]
+    else:
+        t1 = price + d * PROJECTION_ATR_MULT * atr_val
+    further = [t for t in targets if (t - t1) * d >= atr_val]
+    t2 = further[0] if further else t1 + d * PROJECTION_ATR_MULT * atr_val
+
+    return {"dir": d, "sweep_level": float(s_level), "sweep_name": s_name,
+            "t1": float(t1), "t2": float(t2)}
+
+
 def full_analysis(df, htf):
     """Runs everything once and returns one dict that both the chart and
     the message use, so they always agree."""
@@ -770,180 +928,325 @@ def full_analysis(df, htf):
         "price": price,
         **ph,
     }
+    a["projection"] = build_projection(a, price)
     a["trade"] = build_trade_idea(a, price)
     return a
 
 
 # ================== CHART ==================
+def _fmt_price(v, _pos=None):
+    return f"{v:,.3f}"
+
+
+def _fmt_countdown(df):
+    """Time left in the current candle, like the badge on a trading chart."""
+    start = df.index[-1].to_pydatetime()
+    end = start + timedelta(minutes=interval_minutes(INTERVAL))
+    secs = max(int((end - now_utc().replace(tzinfo=None)).total_seconds()), 0)
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def _draw_candles(ax, d, up="#26a69a", down="#ef5350"):
+    x = np.arange(len(d))
+    o, h, l, c = (d[k].values for k in ("Open", "High", "Low", "Close"))
+    colors = np.where(c >= o, up, down)
+    ax.vlines(x, l, h, colors=colors, linewidth=1.1, zorder=2)
+    body = np.maximum(np.abs(c - o), (h - l) * 0.02 + 1e-6)
+    ax.bar(x, body, bottom=np.minimum(o, c), width=0.62, color=colors,
+           edgecolor=colors, linewidth=0.5, zorder=2.1)
+
+
 def create_chart(df, a, filename="xauusd_chart.png"):
-    bias = a["bias"]
-    phase = a["phase"]
-    atr_val = a["atr"]
+    bias, phase = a["bias"], a["phase"]
+    atr_val = a["atr"] or 1.0
+    price = float(df["Close"].iloc[-1])
     swings_high, swings_low = a["swings_high"], a["swings_low"]
-    break_kind, break_index, break_level = a["break_kind"], a["break_index"], a["break_level"]
     htf = a["htf"]
+    proj = a["projection"]
 
-    mc = mpf.make_marketcolors(up="#26a69a", down="#ef5350", edge="inherit", wick="inherit")
-    style = mpf.make_mpf_style(
-        marketcolors=mc,
-        gridstyle=":",
-        gridcolor="#b0bec5",
-        facecolor="#e3f2fd",
-        figcolor="#e3f2fd",
-        y_on_right=True,
-    )
+    plot_df = df.tail(CHART_BARS)
+    W = len(plot_df)
+    offset_start = len(df) - W
+    last_x = W - 1
+    xmax = last_x + 0.30 * W
+    has_vol = "Volume" in plot_df.columns and plot_df["Volume"].sum() > 0
 
-    htf_txt = f" | {htf['interval']} {htf['bias']}" if htf else ""
-    plot_df = df.tail(80)
-    fig, axes = mpf.plot(
-        plot_df,
-        type="candle",
-        style=style,
-        title=f"XAUUSD {INTERVAL.upper()} | {bias} | {phase}{htf_txt} | {a['session']}",
-        ylabel="Price",
-        volume=False,
-        figsize=(13, 7),
-        returnfig=True,
-    )
-    ax = axes[0]
-    offset_start = len(df) - len(plot_df)
-    last_x = len(plot_df) - 1
-    a_ = atr_val or 1
-    view_lo = plot_df["Low"].min() - 3 * a_
-    view_hi = plot_df["High"].max() + 3 * a_
+    # ---- y range (includes the projection so nothing is cut off) ----
+    ys = [float(plot_df["Low"].min()), float(plot_df["High"].max())]
+    if proj:
+        ys += [proj["t1"], proj["t2"], proj["sweep_level"],
+               proj["sweep_level"] - 2.2 * atr_val if proj["dir"] == 1 else proj["sweep_level"] + 2.2 * atr_val]
+    span = max(ys) - min(ys)
+    ylo = min(ys) - span * 0.05
+    yhi = max(ys) + span * 0.10   # extra room on top for arrows + labels
 
     def in_view(p):
-        return view_lo <= p <= view_hi
+        return ylo <= p <= yhi
 
-    # --- key levels (PDH/PDL, Asia, EQH/EQL): labels sit just ABOVE their line ---
+    # ---- figure, gradient background ----
+    fig = plt.figure(figsize=(12, 9), facecolor="#dff3f8")
+    bg = fig.add_axes([0, 0, 1, 1], zorder=-5)
+    grad = np.linspace(1, 0, 256).reshape(-1, 1)
+    bg.imshow(grad, aspect="auto", extent=(0, 1, 0, 1),
+              cmap=LinearSegmentedColormap.from_list("bg", ["#f4fbfd", "#b7e6ef"]))
+    bg.axis("off")
+
+    if has_vol:
+        ax = fig.add_axes([0.025, 0.22, 0.855, 0.68])
+        axv = fig.add_axes([0.025, 0.07, 0.855, 0.13], sharex=ax)
+    else:
+        ax = fig.add_axes([0.025, 0.08, 0.855, 0.82])
+        axv = None
+    for axx in [ax] + ([axv] if axv is not None else []):
+        axx.patch.set_visible(False)
+        for sp in axx.spines.values():
+            sp.set_visible(False)
+
+    ax.set_xlim(-1.5, xmax)
+    ax.set_ylim(ylo, yhi)
+    ax.yaxis.tick_right()
+    ax.yaxis.set_major_formatter(FuncFormatter(_fmt_price))
+    ax.tick_params(axis="y", labelsize=9, length=0, colors="#263238")
+    ax.tick_params(axis="x", length=0)
+    yt = ax.get_yaxis_transform()   # x in axes fraction, y in price
+
+    # ---- time labels on the bottom axis ----
+    step = max(6, int(round(W / 7)))
+    ticks = list(range(0, W, step))
+    labels = [plot_df.index[i].strftime("%b %d, %H:%M") for i in ticks]
+    bottom_ax = axv if axv is not None else ax
+    bottom_ax.set_xticks(ticks)
+    bottom_ax.set_xticklabels(labels, fontsize=8, color="#546e7a")
+    bottom_ax.tick_params(axis="x", length=0)
+    if axv is not None:
+        ax.tick_params(axis="x", labelbottom=False)
+        axv.set_yticks([])
+
+    # ---- volume profile on the right edge ----
+    edges, up_w, dn_w = volume_profile(plot_df)
+    tot = up_w + dn_w
+    if tot.max() > 0:
+        scale = 0.16 * W / tot.max()
+        yc = (edges[:-1] + edges[1:]) / 2
+        bh = (edges[1] - edges[0]) * 0.85
+        ax.barh(yc, -dn_w * scale, left=xmax, height=bh, color="#f3b6c8", alpha=0.65, zorder=0.7)
+        ax.barh(yc, -up_w * scale, left=xmax - dn_w * scale, height=bh, color="#7fcdc4", alpha=0.65, zorder=0.7)
+
+    # ---- big structure box (earliest visible swing -> now) ----
+    hi_pts, lo_pts = [], []
+    for idx, v in swings_high["Swing_High"].items():
+        p = df.index.get_loc(idx) - offset_start
+        if p >= 0:
+            hi_pts.append((p, float(v)))
+    for idx, v in swings_low["Swing_Low"].items():
+        p = df.index.get_loc(idx) - offset_start
+        if p >= 0:
+            lo_pts.append((p, float(v)))
+    if hi_pts and lo_pts:
+        bx0 = min(p for p, _ in hi_pts + lo_pts)
+        b_hi = max(v for _, v in hi_pts)
+        b_lo = min(v for _, v in lo_pts)
+        ax.add_patch(plt.Rectangle((bx0 - 1, b_lo), last_x - bx0 + 1.5, b_hi - b_lo,
+                                   fc="#8fd3dc", ec="none", alpha=0.22, zorder=0.4))
+        if bias == "Neutral":
+            ax.text(bx0, b_hi, "Range — awaiting breakout", ha="left", va="top", fontsize=9,
+                    fontweight="bold", color="#546e7a", zorder=6)
+
+    # ---- impulse-leg boxes ----
+    for leg in find_impulse_legs(df, a["atr"]):
+        x0, x1 = leg["x0"] - offset_start, leg["x1"] - offset_start
+        if x1 < 0:
+            continue
+        col = "#43a047" if leg["dir"] == 1 else "#e53935"
+        ax.add_patch(plt.Rectangle((max(x0, 0), leg["lo"]), x1 - max(x0, 0), leg["hi"] - leg["lo"],
+                                   fc=col, ec=col, alpha=0.12, lw=0, zorder=0.65))
+        ax.add_patch(plt.Rectangle((max(x0, 0), leg["lo"]), x1 - max(x0, 0), leg["hi"] - leg["lo"],
+                                   fc="none", ec=col, lw=1.1, zorder=0.66))
+
+    # ---- supply / demand bands (order blocks) ----
+    if bias in ("Bullish", "Bearish"):
+        zc = "#a5d6a7" if bias == "Bullish" else "#ef9a9a"
+        for z in a["zones"]:
+            zx0 = max(z.get("pos", offset_start) - offset_start, 0)
+            ax.add_patch(plt.Rectangle((zx0, z["low"]), last_x - zx0 + 0.5, z["high"] - z["low"],
+                                       fc=zc, ec="none", alpha=0.55, zorder=0.6))
+
+    # ---- fair value gaps ----
+    for f in a["fvgs"]:
+        fx0 = max(f["pos"] - offset_start, 0)
+        col = "#1e88e5" if f["kind"] == "bullish" else "#fb8c00"
+        ax.add_patch(plt.Rectangle((fx0, f["bottom"]), last_x - fx0 + 0.5, f["top"] - f["bottom"],
+                                   fc=col, ec=col, alpha=0.20, lw=0, zorder=0.62))
+        ax.add_patch(plt.Rectangle((fx0, f["bottom"]), last_x - fx0 + 0.5, f["top"] - f["bottom"],
+                                   fc="none", ec=col, lw=0.6, ls="--", zorder=0.63))
+        ax.text(fx0 + 0.5, f["top"], "FVG", fontsize=7, fontweight="bold", color=col, va="bottom", zorder=6)
+
+    # ---- projection: re-sweep zone, price-range lines, black path ----
+    if proj:
+        d = proj["dir"]
+        S, T1, T2 = proj["sweep_level"], proj["t1"], proj["t2"]
+        good, bad = "#2e7d32", "#c62828"
+        col_dir = good if d == 1 else bad
+
+        band_lo, band_hi = ((S - 0.8 * atr_val, S - 0.05 * atr_val) if d == 1
+                            else (S + 0.05 * atr_val, S + 0.8 * atr_val))
+        ax.add_patch(plt.Rectangle((0, band_lo), last_x * 0.62, band_hi - band_lo,
+                                   fc="#a5d6a7" if d == 1 else "#f4a6b8", ec="none", alpha=0.55, zorder=0.6))
+        ax.axhline(S, color="#455a64", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
+        ax.text(last_x * 0.5, S, "Potential Liquidity Re-Sweep Zone", ha="center", va="center",
+                fontsize=11, color="#263238", zorder=6,
+                bbox=dict(boxstyle="square,pad=0.35", fc="white", ec="#e53935", lw=1.4))
+        bub_col = "#66bb6a" if d == 1 else "#e57390"
+        ax.annotate("Potential Retest – Another Liquidity Sweep",
+                    xy=(last_x * 0.62, S),
+                    xytext=(last_x * 0.28, S - 1.5 * atr_val if d == 1 else S + 1.5 * atr_val),
+                    ha="left", va="top" if d == 1 else "bottom", fontsize=10,
+                    color="#2e5e32" if d == 1 else "#8e2440", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.5", fc="#c8e6c9" if d == 1 else "#f8c9d4", ec=bub_col, lw=1.2),
+                    arrowprops=dict(arrowstyle="-", color=bub_col, lw=1.2))
+
+        xs0 = max(0, last_x - 0.30 * W)
+        for T in (T1, T2):
+            ax.plot([xs0, last_x + 0.22 * W], [T, T], color="#37474f", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
+            ax.text(last_x + 0.235 * W, T, "Price range", ha="left", va="center",
+                    fontsize=11, color="#263238", zorder=6)
+
+        px1, px2, px3 = last_x + 0.05 * W, last_x + 0.13 * W, last_x + 0.20 * W
+        ax.plot([last_x, px1], [price, S], color="#111", lw=1.3, zorder=5)
+        ax.annotate("", xy=(px2, T1), xytext=(px1, S), zorder=5,
+                    arrowprops=dict(arrowstyle="-|>", color="#111", lw=1.3, mutation_scale=14))
+        ax.annotate("", xy=(px3, T2), xytext=(px2, T1), zorder=5,
+                    arrowprops=dict(arrowstyle="-|>", color="#111", lw=1.1, linestyle="--", mutation_scale=12))
+        for lvl in (T2, S):
+            ax.text(1.004, lvl, f"{lvl:,.3f}", transform=yt, ha="left", va="center", fontsize=11,
+                    fontweight="bold", color="white", zorder=7,
+                    bbox=dict(boxstyle="round,pad=0.35", fc=col_dir, ec="none"))
+
+    # ---- key levels (PDH/PDL, Asia, EQH/EQL): small labels, above their line ----
     for lv in a["key_levels"]:
         if not in_view(lv["price"]):
             continue
-        ax.axhline(lv["price"], linestyle="-.", linewidth=0.8, color="#455a64", alpha=0.7, zorder=1)
-        ax.text(0.005, lv["price"], lv["name"], transform=ax.get_yaxis_transform(),
-                fontsize=7, fontweight="bold", color="#37474f", va="bottom", ha="left")
+        ax.axhline(lv["price"], ls="-.", lw=0.7, color="#607d8b", alpha=0.6, zorder=1)
+        ax.text(0.005, lv["price"], lv["name"], transform=yt, fontsize=8, fontweight="bold",
+                color="#455a64", va="bottom", ha="left", zorder=6)
 
-    # --- premium / discount equilibrium line: label sits just BELOW its line
-    # so it can't collide with a key-level label at a nearby price ---
+    # ---- premium/discount equilibrium: label BELOW its line ----
     pdi = a["pd"]
     if pdi and in_view(pdi["eq"]):
-        ax.axhline(pdi["eq"], linestyle=":", linewidth=1.0, color="#8e24aa", alpha=0.8, zorder=1)
-        ax.text(0.005, pdi["eq"], "EQ 50%", transform=ax.get_yaxis_transform(),
-                fontsize=7, fontweight="bold", color="#8e24aa", va="top", ha="left")
+        ax.axhline(pdi["eq"], ls=":", lw=1.0, color="#8e24aa", alpha=0.8, zorder=1)
+        ax.text(0.005, pdi["eq"], "EQ 50%", transform=yt, fontsize=8, fontweight="bold",
+                color="#8e24aa", va="top", ha="left", zorder=6)
 
-    # --- fair value gaps ---
-    for f in a["fvgs"]:
-        x0 = max(f["pos"] - offset_start, 0)
-        col = "#1e88e5" if f["kind"] == "bullish" else "#fb8c00"
-        rect = plt.Rectangle((x0, f["bottom"]), last_x - x0, f["top"] - f["bottom"],
-                              facecolor=col + "26", edgecolor=col, linewidth=0.6, linestyle="--", zorder=1)
-        ax.add_patch(rect)
-        ax.annotate("FVG", xy=(x0 + 0.5, f["top"]), fontsize=7, fontweight="bold", color=col, va="bottom")
+    # ---- Strong High / Strong Low ----
+    if bias == "Bearish" and len(swings_high):
+        s_idx = swings_high["Swing_High"].idxmax()
+        s_val, s_name = float(swings_high["Swing_High"].max()), "Strong High"
+    elif bias == "Bullish" and len(swings_low):
+        s_idx = swings_low["Swing_Low"].idxmin()
+        s_val, s_name = float(swings_low["Swing_Low"].min()), "Strong Low"
+    else:
+        s_idx = None
+    if s_idx is not None:
+        sp_ = df.index.get_loc(s_idx) - offset_start
+        if sp_ >= 0:
+            ax.plot([sp_, last_x + 0.12 * W], [s_val, s_val], color="#111", lw=0.9, zorder=3)
+            ax.text(last_x + 0.12 * W, s_val, s_name, ha="right",
+                    va="bottom" if s_name == "Strong High" else "top", fontsize=8, color="#555", zorder=6)
 
-    # --- swing markers, each labeled against the swing before it ---
-    sh_vals = swings_high["Swing_High"]
-    for i in range(max(0, len(sh_vals) - 2), len(sh_vals)):
-        idx, val = sh_vals.index[i], sh_vals.iloc[i]
-        pos = df.index.get_loc(idx) - offset_start
-        if pos < 0:
-            continue
-        label = ("Lower High" if val < sh_vals.iloc[i - 1] else "Higher High") if i >= 1 else "Swing High"
-        ax.annotate("", xy=(pos, val), xytext=(pos, val + a_ * 1.8),
-                    arrowprops=dict(arrowstyle="-|>", color="#d32f2f", lw=2))
-        ax.annotate(label, xy=(pos, val + a_ * 2.0),
-                    ha="center", fontsize=8, fontweight="bold", color="#d32f2f")
+    # ---- invalidation ----
+    inv = a["invalidation"]
+    if inv and in_view(inv["price"]):
+        ax.axhline(inv["price"], ls=":", lw=1.3, color="#b71c1c", zorder=2)
+        ax.text(0.30, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
+                transform=yt, fontsize=8, fontweight="bold", color="#b71c1c",
+                va="bottom" if inv["side"] == "below" else "top", ha="left", zorder=6)
 
-    sl_vals = swings_low["Swing_Low"]
-    for i in range(max(0, len(sl_vals) - 2), len(sl_vals)):
-        idx, val = sl_vals.index[i], sl_vals.iloc[i]
-        pos = df.index.get_loc(idx) - offset_start
-        if pos < 0:
-            continue
-        label = ("Higher Low" if val > sl_vals.iloc[i - 1] else "Lower Low") if i >= 1 else "Swing Low"
-        ax.annotate("", xy=(pos, val), xytext=(pos, val - a_ * 1.8),
-                    arrowprops=dict(arrowstyle="-|>", color="#2e7d32", lw=2))
-        ax.annotate(label, xy=(pos, val - a_ * 2.0),
-                    ha="center", fontsize=8, fontweight="bold", color="#2e7d32")
-
-    # --- BOS/CHoCH line ---
-    if break_kind and break_index is not None:
-        bx = break_index - offset_start
-        if bx >= 0:
-            col = "#d500f9" if break_kind == "CHoCH" else "#111"
-            ax.plot([bx, last_x], [break_level, break_level], linestyle="--", linewidth=1, color=col, alpha=0.8)
-            tag = break_kind + (" ✔ retest held" if a["retest_held"] else "")
-            ax.annotate(tag, xy=((bx + last_x) / 2, break_level), fontsize=9, fontweight="bold",
-                        color=col, ha="center", va="bottom")
-
-    # --- liquidity sweep marker ---
+    # ---- liquidity sweep that already happened ----
     sweep = a["sweep"]
     if sweep:
         sx = sweep["pos"] - offset_start
-        if sx >= 0:
+        if sx >= 0 and in_view(sweep["level"]):
             ax.plot([max(sx - 6, 0), last_x], [sweep["level"], sweep["level"]],
-                    linestyle=":", linewidth=1.2, color="#6a1b9a")
-            ax.annotate(f"Sweep ({sweep['name']})", xy=(sx, sweep["level"]), fontsize=8, fontweight="bold",
-                        color="#6a1b9a", ha="center",
-                        va="bottom" if sweep["side"] == "buy-side" else "top")
+                    ls=":", lw=1.2, color="#6a1b9a", zorder=3)
+            ax.text(sx, sweep["level"], f"Sweep ({sweep['name']})", fontsize=8, fontweight="bold",
+                    color="#6a1b9a", ha="center", va="bottom" if sweep["side"] == "buy-side" else "top", zorder=6)
 
-    # --- order-block zones or range box ---
-    zones = a["zones"]
-    if bias in ("Bullish", "Bearish"):
-        zone_color = "#26a69a" if bias == "Bullish" else "#ef5350"
-        for i, ob in enumerate(zones):
-            rect = plt.Rectangle((0, ob["low"]), last_x, ob["high"] - ob["low"],
-                                  facecolor=zone_color + "22", edgecolor=zone_color, linewidth=0.8, zorder=1)
-            ax.add_patch(rect)
-            if i == 0:
-                ax.annotate("Order Block / Re-Sweep Zone", xy=(last_x * 0.15, (ob["high"] + ob["low"]) / 2),
-                            color=zone_color, fontsize=8, fontweight="bold",
-                            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor=zone_color, alpha=0.9))
-    elif len(swings_high) >= 1 and len(swings_low) >= 1:
-        range_hi = swings_high["Swing_High"].iloc[-1]
-        range_lo = swings_low["Swing_Low"].iloc[-1]
-        rect = plt.Rectangle((0, range_lo), last_x, range_hi - range_lo,
-                              facecolor="#9e9e9e22", edgecolor="#616161", linewidth=0.8, zorder=1)
-        ax.add_patch(rect)
-        ax.annotate("Range — awaiting breakout", xy=(last_x * 0.15, (range_hi + range_lo) / 2),
-                    color="#616161", fontsize=8, fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#616161", alpha=0.9))
+    # ---- candles ----
+    _draw_candles(ax, plot_df)
 
-    # --- invalidation line ---
-    inv = a["invalidation"]
-    if inv and in_view(inv["price"]):
-        ax.axhline(inv["price"], linestyle=":", linewidth=1.3, color="#b71c1c", zorder=2)
-        ax.text(0.995, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
-                transform=ax.get_yaxis_transform(), fontsize=7, fontweight="bold",
-                color="#b71c1c", va="bottom", ha="right")
+    # ---- BOS / CHoCH along the visible history ----
+    events = [e for e in detect_structure_events(df) if e["kind"] and e["to_pos"] >= offset_start][-6:]
+    for e in events:
+        xa = max(e["from_pos"] - offset_start, 0)
+        xb = e["to_pos"] - offset_start
+        if xb <= xa:
+            continue
+        ax.plot([xa, xb], [e["level"], e["level"]], color="#111", lw=0.9, ls=(0, (4, 3)), zorder=3)
+        ax.text((xa + xb) / 2, e["level"], e["kind"], ha="center",
+                va="bottom" if e["dir"] == "bull" else "top", fontsize=9, color="#111", zorder=6)
 
-    # --- phase badge: sits just ABOVE the plot area (outside it), so it never
-    # covers level labels or candles ---
-    phase_color = PHASE_COLORS.get(phase, "#616161")
-    ax.text(0.0, 1.012, f"PHASE: {phase.upper()}", transform=ax.transAxes, fontsize=10,
-            fontweight="bold", color="white", va="bottom", ha="left",
-            bbox=dict(boxstyle="round,pad=0.4", facecolor=phase_color, edgecolor="none"))
+    # ---- swing arrows + labels (last two highs, last two lows) ----
+    def swing_marker(pos, val, label, is_high):
+        col = "#d32f2f" if is_high else "#2e7d32"
+        ax.annotate("", xy=(pos, val), xycoords="data",
+                    xytext=(0, 32 if is_high else -32), textcoords="offset points", zorder=6,
+                    arrowprops=dict(arrowstyle="simple,head_width=1.2,head_length=1.0,tail_width=0.5",
+                                    fc=col, ec=col, mutation_scale=16, shrinkA=0, shrinkB=3))
+        side = -1 if pos >= 14 else 1
+        ax.plot([pos + side * 0.5, pos + side * 5.0], [val, val], color="#111", lw=0.8, ls=(0, (3, 3)), zorder=3)
+        ax.text(pos + side * 5.4, val, label, ha="right" if side == -1 else "left", va="center",
+                fontsize=11, color="#111", zorder=6)
 
-    # --- current price badge ---
-    last_price = df["Close"].iloc[-1]
-    badge_color = "#26a69a" if bias == "Bullish" else ("#ef5350" if bias == "Bearish" else "#616161")
-    ax.annotate(f"{last_price:,.2f}", xy=(last_x, last_price), xytext=(12, 0), textcoords="offset points",
-                fontsize=10, fontweight="bold", color="white", va="center",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor=badge_color, edgecolor="none"))
+    sh_vals = swings_high["Swing_High"]
+    for i in range(max(0, len(sh_vals) - 2), len(sh_vals)):
+        pos = df.index.get_loc(sh_vals.index[i]) - offset_start
+        if pos < 0:
+            continue
+        val = float(sh_vals.iloc[i])
+        label = ("Lower High" if val < sh_vals.iloc[i - 1] else "Higher High") if i >= 1 else "Swing High"
+        swing_marker(pos, val, label, True)
 
-    # --- ATR-based projected target (directional bias only) ---
-    if atr_val and bias in ("Bullish", "Bearish"):
-        direction = 1 if bias == "Bullish" else -1
-        target = last_price + direction * PROJECTION_ATR_MULT * atr_val
-        mid_x = last_x + (len(plot_df) * 0.15)
-        end_x = last_x + (len(plot_df) * 0.3)
-        pullback = last_price - direction * atr_val * 0.5
-        ax.plot([last_x, mid_x, end_x], [last_price, pullback, target],
-                linestyle="--", linewidth=1.2, color="#616161", alpha=0.8)
-        ax.annotate("Price range", xy=(end_x, target), xytext=(6, 0), textcoords="offset points",
-                    fontsize=8, fontweight="bold", color="#424242")
-        ax.set_xlim(right=end_x + 3)
+    sl_vals = swings_low["Swing_Low"]
+    for i in range(max(0, len(sl_vals) - 2), len(sl_vals)):
+        pos = df.index.get_loc(sl_vals.index[i]) - offset_start
+        if pos < 0:
+            continue
+        val = float(sl_vals.iloc[i])
+        label = ("Higher Low" if val > sl_vals.iloc[i - 1] else "Lower Low") if i >= 1 else "Swing Low"
+        swing_marker(pos, val, label, False)
 
-    plt.savefig(filename, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    # ---- current price: dotted line + badges ----
+    ax.axhline(price, color="#ef5350", ls=":", lw=1.0, zorder=1.5)
+    ax.text(1.004, price, f"{price:,.3f}", transform=yt, ha="left", va="center", fontsize=11,
+            fontweight="bold", color="white", zorder=8,
+            bbox=dict(boxstyle="square,pad=0.3", fc="#111", ec="none"))
+    ax.annotate(f"XAUUSD\n{_fmt_countdown(df)}", xy=(1.004, price), xycoords=yt,
+                xytext=(0, -27), textcoords="offset points", ha="left", va="center",
+                fontsize=9, fontweight="bold", color="white", zorder=8,
+                bbox=dict(boxstyle="square,pad=0.3", fc="#ef5350", ec="none"))
+
+    # ---- volume bars (only when the feed provides volume) ----
+    if axv is not None:
+        v = plot_df["Volume"].values
+        cols = np.where(plot_df["Close"].values >= plot_df["Open"].values, "#26a69a", "#ef5350")
+        axv.bar(np.arange(W), v, width=0.7, color=cols, alpha=0.45)
+        axv.set_ylim(0, max(v.max() * 1.15, 1))
+        vtxt = f"{v[-1] / 1000:.2f}K" if v[-1] >= 1000 else f"{v[-1]:.0f}"
+        axv.text(1.004, v[-1], vtxt, transform=axv.get_yaxis_transform(), ha="left", va="center",
+                 fontsize=9, fontweight="bold", color="white", clip_on=False,
+                 bbox=dict(boxstyle="square,pad=0.3", fc="#ef5350", ec="none"))
+
+    # ---- title + phase badge ----
+    htf_txt = f" · {htf['interval']} {htf['bias']}" if htf else ""
+    fig.text(0.03, 0.955, f"XAUUSD · {INTERVAL.upper()} · {bias}{htf_txt} · {a['session']}",
+             fontsize=13, fontweight="bold", color="#263238", va="center")
+    fig.text(0.03, 0.918, f"PHASE: {phase.upper()}", fontsize=10, fontweight="bold", color="white",
+             va="center", ha="left",
+             bbox=dict(boxstyle="round,pad=0.4", fc=PHASE_COLORS.get(phase, "#616161"), ec="none"))
+
+    fig.savefig(filename, dpi=150, facecolor=fig.get_facecolor())
     plt.close(fig)
     return filename
 
@@ -1034,8 +1337,16 @@ def create_message(a, price):
     inv = a["invalidation"]
     if inv:
         parts.append(
-            f"⚠️ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
+            f"⚠ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
             f"breaks this read.\n"
+        )
+
+    # projection (matches the chart)
+    proj = a["projection"]
+    if proj:
+        parts.append(
+            f"\n<b>Liquidity re-sweep zone:</b> {proj['sweep_level']:,.2f} ({proj['sweep_name']})\n"
+            f"<b>Price range targets:</b> {proj['t1']:,.2f} → {proj['t2']:,.2f}\n"
         )
 
     # trade idea
@@ -1052,12 +1363,6 @@ def create_message(a, price):
             f"{tp} (1R / 2R / 3R)\n"
             f"{cond}{counter}\n"
         )
-
-    # projection target
-    if a["atr"] and bias in ("Bullish", "Bearish"):
-        direction = 1 if bias == "Bullish" else -1
-        target = price + direction * PROJECTION_ATR_MULT * a["atr"]
-        parts.append(f"\nProjected range target (ATR-based): <b>{target:,.2f}</b>\n")
 
     bias_txt = f"<b>Bias:</b> {bias} — {outlook_line(phase, bias)}"
     parts.append("\n" + bias_txt + "\n")
