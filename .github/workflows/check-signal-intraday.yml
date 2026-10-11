@@ -43,7 +43,7 @@ jobs:
           ENTRY_MODE: "retest_or_pullback"  # breakout+retest OR pullback — either confirms
           RETEST_TOLERANCE_ATR_MULT: "0.25"
           SWING_ENTRY_MODE: "true"          # pullback fallback now requires 50-79% retracement before confirming
-          TP_MULTIPLES: "1,2,3,4,5"
+          TP_MULTIPLES: "1,2,3"
           DAY_MAX_HOLD_HOURS: "24"
           DAY_SWING_MAX_HOLD_HOURS: "72"
           SWING_MAX_HOLD_HOURS: "240"
