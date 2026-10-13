@@ -5,6 +5,13 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
+concurrency:
+  group: xauusd-market-update
+  cancel-in-progress: false
+
 jobs:
   post-update:
     runs-on: ubuntu-latest
@@ -19,7 +26,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy mplfinance matplotlib requests
+          pip install pandas numpy matplotlib requests
 
       - name: Run XAUUSD market update
         env:
@@ -28,3 +35,12 @@ jobs:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           XAU_INTERVAL: "30min"
         run: python xauusd_market_update.py
+
+      - name: Commit state files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state_xau_update.json open_trade.json || true
+          git diff --cached --quiet || git commit -m "Update XAUUSD state"
+          git pull --rebase || true
+          git push || true
