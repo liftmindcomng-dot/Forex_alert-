@@ -20,6 +20,9 @@ What it does each run:
   6. Session tag, invalidation level, and an informational trade idea.
   7. Projection: liquidity re-sweep zone + two "price range" targets.
   8. Skips near-identical repeat posts (state file), with a heartbeat post.
+  9. Position guidance from open_trade.json (open trade or last stop-out):
+     Fresh entry / Re-entry / Wait / Don't enter, or Hold / Move to breakeven /
+     Exit / Stop reached. Informational only.
 
 Chart style: TradingView-like SMC layout drawn with plain matplotlib
 (mplfinance is no longer needed): cyan gradient background, structure box,
@@ -91,6 +94,7 @@ MAX_TARGET_ATR = float(os.getenv("MAX_TARGET_ATR", "8"))         # ignore "price
 SKIP_REPEATS = os.getenv("SKIP_REPEATS", "true").lower() == "true"
 FORCE_POST_HOURS = float(os.getenv("FORCE_POST_HOURS", "4"))     # 0 = never force a heartbeat post
 STATE_FILE = os.getenv("XAU_STATE_FILE", "state_xau_update.json")
+OPEN_TRADE_FILE = os.getenv("XAU_OPEN_TRADE_FILE", "open_trade.json")   # written by you or the EA
 
 # data safety
 FETCH_RETRIES = int(os.getenv("FETCH_RETRIES", "3"))
@@ -865,72 +869,304 @@ def build_projection(a, price):
             "t1": float(t1), "t2": float(t2)}
 
 
-def full_analysis(df, htf):
-    """Runs everything once and returns one dict that both the chart and
-    the message use, so they always agree."""
-    (notes, bias, break_kind, break_index, break_level, swings_high,
-     swings_low, order_block, displacement_hit, atr_val, break_pos) = analyze_structure_deep(df)
+# ================== OPEN TRADE / POSITION GUIDANCE ==================
+def load_open_trade():
+    """Reads open_trade.json. Format:
+      {
+        "open":        {"direction": "LONG" or "SHORT", "entry": 4150.0,
+                        "stop": 4145.0, "be_moved": false}   or null,
+        "last_closed": {"direction": "LONG" or "SHORT", "entry": 4150.0,
+                        "stop": 4145.0, "result": "stopped" or "closed"}   or null
+      }
+    Returns (open_trade, last_closed), each None when missing or invalid.
+    Never raises: a missing or broken file just means "no trade recorded"."""
+    try:
+        with open(OPEN_TRADE_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        return None, None
 
-    levels, key_levels = build_levels(df, swings_high, swings_low, atr_val)
-    ph = classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
-                        displacement_hit, atr_val, levels, break_pos)
+    def valid(t):
+        return (isinstance(t, dict)
+                and t.get("direction") in ("LONG", "SHORT")
+                and isinstance(t.get("entry"), (int, float))
+                and isinstance(t.get("stop"), (int, float))
+                and t["entry"] != t["stop"])
 
-    zones = []
-    if bias in ("Bullish", "Bearish"):
-        swings_for_ob = swings_low if bias == "Bullish" else swings_high
-        zones = find_order_blocks_multi(df, bias, swings_for_ob, lookback=OB_LOOKBACK, max_zones=3)
+    op = data.get("open") if isinstance(data, dict) else None
+    lc = data.get("last_closed") if isinstance(data, dict) else None
+    return (op if valid(op) else None), (lc if valid(lc) else None)
 
-    price = float(df["Close"].iloc[-1])
-    in_zone = any(z["low"] <= price <= z["high"] for z in zones)
 
-    fvgs = detect_fvgs(df, atr_val)
-    in_fvg = next((f for f in fvgs if f["bottom"] <= price <= f["top"]), None)
-    pd_info = premium_discount(price, swings_high, swings_low)
-    session_name, session_note = current_session()
-    align_state, align_text = htf_alignment(bias, htf)
-    inv = invalidation_level(bias, ph["phase"], swings_high, swings_low, ph["sweep"])
+def position_guidance(a, price, open_trade, last_closed):
+    """One suggested action, informational only.
+    With an open trade:  Hold / Move to breakeven / Exit / Stop reached.
+    Without one:         Fresh entry / Re-entry / Wait / Don't enter.
+    Re-entry means the last recorded trade in the same direction was stopped
+    out and the setup is valid again. Returns {"action", "detail", "key"}."""
+    bias, phase = a["bias"], a["phase"]
+    t = a["trade"]
 
-    extra_notes = list(notes)
-    if ph["sweep"] and ph["phase"] != "Potential Reversal":
-        s = ph["sweep"]
-        extra_notes.append(
-            f"{s['side'].capitalize()} liquidity ({s['name']}) swept at {s['level']:,.2f} ({s['dir']} rejection)"
-        )
-    if in_zone:
-        extra_notes.append("Price is inside an order-block zone")
-    if in_fvg:
-        extra_notes.append(f"Price is inside a {in_fvg['kind']} FVG ({in_fvg['bottom']:,.2f} – {in_fvg['top']:,.2f})")
+    if open_trade:
+        d = 1 if open_trade["direction"] == "LONG" else -1
+        entry, stop = float(open_trade["entry"]), float(open_trade["stop"])
+        risk = abs(entry - stop)
+        progress = (price - entry) * d / risk          # in R; negative = against us
+        through_stop = (price - stop) * d <= 0
+        structure_against = (bias == "Bullish" and d == -1) or (bias == "Bearish" and d == 1)
 
-    a = {
-        "notes": extra_notes,
-        "bias": bias,
-        "break_kind": break_kind,
-        "break_index": break_index,
-        "break_level": break_level,
-        "break_pos": break_pos,
-        "swings_high": swings_high,
-        "swings_low": swings_low,
-        "order_block": order_block,
-        "zones": zones,
-        "in_zone": in_zone,
-        "fvgs": fvgs,
-        "in_fvg": in_fvg,
-        "pd": pd_info,
-        "key_levels": key_levels,
-        "session": session_name,
-        "session_note": session_note,
-        "htf": htf,
-        "align_state": align_state,
-        "align_text": align_text,
-        "invalidation": inv,
-        "displacement_hit": displacement_hit,
-        "atr": atr_val,
-        "price": price,
-        **ph,
+        if through_stop:
+            return {"action": "Stop reached",
+                    "detail": f"Price is through the stop at {stop:,.2f}. Record the trade as closed in {OPEN_TRADE_FILE}.",
+                    "key": "stop"}
+        if structure_against and phase in ("Reversal", "Continuation"):
+            return {"action": "Exit",
+                    "detail": "A confirmed break has turned structure against the trade. Consider closing it.",
+                    "key": "exit"}
+        if phase == "Invalidation Risk" and not structure_against and bias in ("Bullish", "Bearish"):
+            return {"action": "Exit",
+                    "detail": "The pullback has taken more than the whole last leg. Consider reducing or closing.",
+                    "key": "exit"}
+        if progress >= 1 and not open_trade.get("be_moved"):
+            return {"action": "Move to breakeven",
+                    "detail": f"Price is at {progress:.1f}R. Move the stop to entry {entry:,.2f}, then set be_moved to true.",
+                    "key": "be"}
+        if open_trade.get("be_moved"):
+            detail = f"Stop is at breakeven ({entry:,.2f}) and structure still supports the trade."
+        else:
+            detail = f"Structure still supports the trade. Currently {progress:.1f}R, stop {stop:,.2f}."
+        return {"action": "Hold", "detail": detail, "key": "hold"}
+
+    if t is None:
+        return {"action": "Don't enter",
+                "detail": f"No valid setup at this price. {a['confirmation']}.",
+                "key": "none"}
+    if t["conditional"]:
+        return {"action": "Wait",
+                "detail": "A setup is forming but not confirmed yet. Wait for the structure break and retest.",
+                "key": "wait"}
+    same_as_stopped = (last_closed is not None and last_closed.get("result") == "stopped"
+                       and last_closed["direction"] == t["direction"])
+    if same_as_stopped:
+        return {"action": "Re-entry",
+                "detail": f"The last {t['direction']} was stopped out. Enter again only if the retest holds, not on the first touch.",
+                "key": "reentry"}
+    return {"action": "Fresh entry",
+            "detail": f"Confirmed {t['direction']} setup. Entry near {t['entry']:,.2f} with the stop at {t['stop']:,.2f}.",
+            "key": "fresh"}
+
+
+# ================== MESSAGE ==================
+def outlook_line(phase, bias):
+    d = "bullish" if bias == "Bullish" else "bearish"
+    opp = "bearish" if bias == "Bullish" else "bullish"
+    lines = {
+        "Continuation": f"Trend continuation ({d}). Look for entries on a pullback to the zone or the broken level.",
+        "Reversal": f"Possible reversal to {d}. Wait for a retest of the broken level to hold before trusting it.",
+        "Pullback": f"Pullback inside a {d} trend. Wait for a reaction at the zone, then a resumption {d}.",
+        "Trend Leg": f"{d.capitalize()} leg in progress. No new break yet, so wait for the next structure break or a pullback.",
+        "Invalidation Risk": f"Pullback has exceeded the last {d} leg. The trend is at risk of flipping {opp}.",
+        "Potential Reversal": "Liquidity was taken and rejected. Wait for a break of structure to confirm direction.",
+        "Range": "No trade bias until price breaks the range.",
     }
-    a["projection"] = build_projection(a, price)
-    a["trade"] = build_trade_idea(a, price)
-    return a
+    return lines.get(phase, "Wait for reaction at the zone.")
+
+
+def create_caption(a, price):
+    """Short caption for the photo (Telegram caps captions at 1024 chars)."""
+    htf = a["htf"]
+    htf_part = f" | {htf['interval']}: {htf['bias']}" if htf else ""
+    return (
+        f"📌 <b>XAUUSD {INTERVAL.upper()} — {a['phase']}</b>\n"
+        f"Price <b>{price:,.2f}</b> | Bias: <b>{a['bias']}</b>{htf_part}\n"
+        f"{a['confirmation']}\n"
+        f"🧭 Guidance: <b>{a['guidance']['action']}</b>"
+    )[:1000]
+
+
+def create_message(a, price):
+    date_str = now_utc().strftime("%B %d").upper()
+    bias, phase = a["bias"], a["phase"]
+    swings_high, swings_low = a["swings_high"], a["swings_low"]
+    notes_text = "\n".join(f"• {n}" for n in a["notes"]) if a["notes"] else "• Structure developing"
+
+    parts = []
+    parts.append(
+        f"📌 <b>MARKET UPDATE – {date_str}</b>\n"
+        f"— {PAIR.replace('/', '')} / {INTERVAL.upper()} —\n\n"
+        f"XAUUSD is trading around <b>{price:,.2f}</b>.\n"
+        f"🕒 Session: <b>{a['session']}</b> — {a['session_note']}\n\n"
+        f"<b>Phase:</b> {phase}\n"
+        f"<b>Status:</b> {a['confirmation']}\n"
+        f"<b>HTF:</b> {a['align_text']}\n"
+    )
+    parts.append(f"<b>Structure:</b>\n{notes_text}\n")
+
+    # premium / discount
+    pdi = a["pd"]
+    if pdi:
+        parts.append(
+            f"<b>Location:</b> {pdi['label']} ({pdi['pct'] * 100:.0f}% of range "
+            f"{pdi['lo']:,.2f} – {pdi['hi']:,.2f}, EQ {pdi['eq']:,.2f})\n"
+        )
+
+    # key levels
+    if a["key_levels"]:
+        kl = " | ".join(f"{k['name']} {k['price']:,.2f}" for k in a["key_levels"])
+        parts.append(f"<b>Key levels:</b> {kl}\n")
+
+    # FVGs
+    if a["fvgs"]:
+        lines = []
+        for f in a["fvgs"][::-1]:
+            fill = f" ({f['filled'] * 100:.0f}% filled)" if f["filled"] > 0 else ""
+            lines.append(f"• {f['kind'].capitalize()} FVG {f['bottom']:,.2f} – {f['top']:,.2f}{fill}")
+        parts.append("<b>Fair value gaps:</b>\n" + "\n".join(lines) + "\n")
+
+    # order block (nearest zone to price) or range
+    zones = a["zones"]
+    if bias in ("Bullish", "Bearish"):
+        if a["in_zone"]:
+            parts.append("Price is reacting inside an order-block zone.\n")
+        elif zones:
+            z = min(zones, key=lambda zz: min(abs(price - zz["low"]), abs(price - zz["high"])))
+            parts.append(f"Nearest order-block zone: {z['low']:,.2f} – {z['high']:,.2f}.\n")
+    elif len(swings_high) >= 1 and len(swings_low) >= 1:
+        range_hi = swings_high["Swing_High"].iloc[-1]
+        range_lo = swings_low["Swing_Low"].iloc[-1]
+        parts.append(
+            f"Price is between <b>{range_lo:,.2f}</b> and <b>{range_hi:,.2f}</b>.\n"
+            f"Watch a break above <b>{range_hi:,.2f}</b> (bullish) or below <b>{range_lo:,.2f}</b> (bearish).\n"
+        )
+
+    # invalidation
+    inv = a["invalidation"]
+    if inv:
+        parts.append(
+            f"⚠️ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
+            f"breaks this read.\n"
+        )
+
+    # projection (matches the chart)
+    proj = a["projection"]
+    if proj:
+        parts.append(
+            f"\n<b>Liquidity re-sweep zone:</b> {proj['sweep_level']:,.2f} ({proj['sweep_name']})\n"
+            f"<b>Price range targets:</b> {proj['t1']:,.2f} → {proj['t2']:,.2f}\n"
+        )
+
+    # trade idea (suppressed while a trade is open; guidance covers it)
+    t = a["trade"] if not a["open_trade"] else None
+    if t:
+        zone_txt = f"{t['zone_name']} {t['zone'][0]:,.2f} – {t['zone'][1]:,.2f}" if t["zone"] else t["zone_name"]
+        tp = " | ".join(f"TP{i + 1} {v:,.2f}" for i, v in enumerate(t["targets"]))
+        cond = "Conditional: wait for confirmation first." if t["conditional"] else "Look for a reaction at the zone."
+        counter = " Counter-HTF, so size down or skip." if a["align_state"] == "counter" else ""
+        parts.append(
+            f"\n🎯 <b>TRADE IDEA</b> (informational, not a signal)\n"
+            f"<b>{t['direction']}</b> — {zone_txt}\n"
+            f"Entry ~{t['entry']:,.2f} | Stop {t['stop']:,.2f}\n"
+            f"{tp} (1R / 2R / 3R)\n"
+            f"{cond}{counter}\n"
+        )
+
+    ot = a["open_trade"]
+    if ot:
+        risk = abs(float(ot["entry"]) - float(ot["stop"]))
+        parts.append(
+            f"\n<b>Open trade:</b> {ot['direction']} from {float(ot['entry']):,.2f} | "
+            f"stop {float(ot['stop']):,.2f} | risk {risk:,.2f}"
+            + (" | stop at breakeven" if ot.get("be_moved") else "") + "\n"
+        )
+    g = a["guidance"]
+    parts.append(f"\n🧭 <b>POSITION GUIDANCE: {g['action'].upper()}</b>\n{g['detail']}\n")
+
+    bias_txt = f"<b>Bias:</b> {bias} — {outlook_line(phase, bias)}"
+    parts.append("\n" + bias_txt + "\n")
+
+    msg = "\n".join(p.rstrip("\n") for p in parts)
+    if len(msg) > 4000:  # Telegram message limit is 4096; cut at a line boundary
+        msg = msg[:4000].rsplit("\n", 1)[0]
+    return msg
+
+
+# ================== REPEAT SKIPPING ==================
+def make_signature(a):
+    htf_bias = a["htf"]["bias"] if a["htf"] else "NA"
+    sweep_name = a["sweep"]["name"] if a["sweep"] else "none"
+    return "|".join([
+        a["phase"], a["bias"], str(a["break_kind"]), htf_bias,
+        f"zone={int(a['in_zone'])}", f"fvg={int(a['in_fvg'] is not None)}", f"sweep={sweep_name}",
+        f"guide={a['guidance']['key']}",
+    ])
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(signature):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump({"signature": signature, "last_post_utc": now_utc().isoformat()}, f)
+    except Exception as e:
+        print("Could not save state:", e)
+
+
+def should_post(signature):
+    if not SKIP_REPEATS:
+        return True, "repeat-skipping is off"
+    st = load_state()
+    if st.get("signature") != signature:
+        return True, "setup changed"
+    last = st.get("last_post_utc")
+    if not last:
+        return True, "no previous post time"
+    if FORCE_POST_HOURS > 0:
+        try:
+            age_h = (now_utc() - datetime.fromisoformat(last)).total_seconds() / 3600
+            if age_h >= FORCE_POST_HOURS:
+                return True, f"heartbeat ({age_h:.1f}h since last post)"
+        except Exception:
+            return True, "could not read last post time"
+    return False, "same setup as the last post"
+
+
+# ================== SEND ==================
+def _telegram_post(method, data, files=None):
+    import requests
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    last = None
+    for attempt in range(1, 4):
+        try:
+            resp = requests.post(url, data=data, files=files, timeout=30)
+            last = resp.json()
+            if last.get("ok"):
+                return last
+        except Exception as e:
+            last = {"ok": False, "error": str(e)}
+        if attempt < 3:
+            time.sleep(2 * attempt)
+            if files:  # rewind the file so the retry re-sends the full image
+                for f in files.values():
+                    f.seek(0)
+    return last
+
+
+def send_telegram_update(photo_path, caption, message):
+    with open(photo_path, "rb") as photo:
+        r1 = _telegram_post("sendPhoto",
+                            {"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+                            files={"photo": photo})
+    if not r1.get("ok"):
+        return r1
+    return _telegram_post("sendMessage",
+                          {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML",
+                           "disable_web_page_preview": True})
 
 
 # ================== CHART ==================
@@ -1254,207 +1490,79 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     return filename
 
 
-# ================== MESSAGE ==================
-def outlook_line(phase, bias):
-    d = "bullish" if bias == "Bullish" else "bearish"
-    opp = "bearish" if bias == "Bullish" else "bullish"
-    lines = {
-        "Continuation": f"Trend continuation ({d}). Look for entries on a pullback to the zone or the broken level.",
-        "Reversal": f"Possible reversal to {d}. Wait for a retest of the broken level to hold before trusting it.",
-        "Pullback": f"Pullback inside a {d} trend. Wait for a reaction at the zone, then a resumption {d}.",
-        "Trend Leg": f"{d.capitalize()} leg in progress. No new break yet, so wait for the next structure break or a pullback.",
-        "Invalidation Risk": f"Pullback has exceeded the last {d} leg. The trend is at risk of flipping {opp}.",
-        "Potential Reversal": "Liquidity was taken and rejected. Wait for a break of structure to confirm direction.",
-        "Range": "No trade bias until price breaks the range.",
-    }
-    return lines.get(phase, "Wait for reaction at the zone.")
-
-
-def create_caption(a, price):
-    """Short caption for the photo (Telegram caps captions at 1024 chars)."""
-    htf = a["htf"]
-    htf_part = f" | {htf['interval']}: {htf['bias']}" if htf else ""
-    return (
-        f"📌 <b>XAUUSD {INTERVAL.upper()} — {a['phase']}</b>\n"
-        f"Price <b>{price:,.2f}</b> | Bias: <b>{a['bias']}</b>{htf_part}\n"
-        f"{a['confirmation']}"
-    )[:1000]
-
-
-def create_message(a, price):
-    date_str = now_utc().strftime("%B %d").upper()
-    bias, phase = a["bias"], a["phase"]
-    swings_high, swings_low = a["swings_high"], a["swings_low"]
-    notes_text = "\n".join(f"• {n}" for n in a["notes"]) if a["notes"] else "• Structure developing"
-
-    parts = []
-    parts.append(
-        f"📌 <b>MARKET UPDATE – {date_str}</b>\n"
-        f"— {PAIR.replace('/', '')} / {INTERVAL.upper()} —\n\n"
-        f"XAUUSD is trading around <b>{price:,.2f}</b>.\n"
-        f"🕒 Session: <b>{a['session']}</b> — {a['session_note']}\n\n"
-        f"<b>Phase:</b> {phase}\n"
-        f"<b>Status:</b> {a['confirmation']}\n"
-        f"<b>HTF:</b> {a['align_text']}\n"
-    )
-    parts.append(f"<b>Structure:</b>\n{notes_text}\n")
-
-    # premium / discount
-    pdi = a["pd"]
-    if pdi:
-        parts.append(
-            f"<b>Location:</b> {pdi['label']} ({pdi['pct'] * 100:.0f}% of range "
-            f"{pdi['lo']:,.2f} – {pdi['hi']:,.2f}, EQ {pdi['eq']:,.2f})\n"
-        )
-
-    # key levels
-    if a["key_levels"]:
-        kl = " | ".join(f"{k['name']} {k['price']:,.2f}" for k in a["key_levels"])
-        parts.append(f"<b>Key levels:</b> {kl}\n")
-
-    # FVGs
-    if a["fvgs"]:
-        lines = []
-        for f in a["fvgs"][::-1]:
-            fill = f" ({f['filled'] * 100:.0f}% filled)" if f["filled"] > 0 else ""
-            lines.append(f"• {f['kind'].capitalize()} FVG {f['bottom']:,.2f} – {f['top']:,.2f}{fill}")
-        parts.append("<b>Fair value gaps:</b>\n" + "\n".join(lines) + "\n")
-
-    # order block (nearest zone to price) or range
-    zones = a["zones"]
-    if bias in ("Bullish", "Bearish"):
-        if a["in_zone"]:
-            parts.append("Price is reacting inside an order-block zone.\n")
-        elif zones:
-            z = min(zones, key=lambda zz: min(abs(price - zz["low"]), abs(price - zz["high"])))
-            parts.append(f"Nearest order-block zone: {z['low']:,.2f} – {z['high']:,.2f}.\n")
-    elif len(swings_high) >= 1 and len(swings_low) >= 1:
-        range_hi = swings_high["Swing_High"].iloc[-1]
-        range_lo = swings_low["Swing_Low"].iloc[-1]
-        parts.append(
-            f"Price is between <b>{range_lo:,.2f}</b> and <b>{range_hi:,.2f}</b>.\n"
-            f"Watch a break above <b>{range_hi:,.2f}</b> (bullish) or below <b>{range_lo:,.2f}</b> (bearish).\n"
-        )
-
-    # invalidation
-    inv = a["invalidation"]
-    if inv:
-        parts.append(
-            f"⚠️ <b>Invalidation:</b> a close {inv['side']} <b>{inv['price']:,.2f}</b> "
-            f"breaks this read.\n"
-        )
-
-    # projection (matches the chart)
-    proj = a["projection"]
-    if proj:
-        parts.append(
-            f"\n<b>Liquidity re-sweep zone:</b> {proj['sweep_level']:,.2f} ({proj['sweep_name']})\n"
-            f"<b>Price range targets:</b> {proj['t1']:,.2f} → {proj['t2']:,.2f}\n"
-        )
-
-    # trade idea
-    t = a["trade"]
-    if t:
-        zone_txt = f"{t['zone_name']} {t['zone'][0]:,.2f} – {t['zone'][1]:,.2f}" if t["zone"] else t["zone_name"]
-        tp = " | ".join(f"TP{i + 1} {v:,.2f}" for i, v in enumerate(t["targets"]))
-        cond = "Conditional: wait for confirmation first." if t["conditional"] else "Look for a reaction at the zone."
-        counter = " Counter-HTF, so size down or skip." if a["align_state"] == "counter" else ""
-        parts.append(
-            f"\n🎯 <b>TRADE IDEA</b> (informational, not a signal)\n"
-            f"<b>{t['direction']}</b> — {zone_txt}\n"
-            f"Entry ~{t['entry']:,.2f} | Stop {t['stop']:,.2f}\n"
-            f"{tp} (1R / 2R / 3R)\n"
-            f"{cond}{counter}\n"
-        )
-
-    bias_txt = f"<b>Bias:</b> {bias} — {outlook_line(phase, bias)}"
-    parts.append("\n" + bias_txt + "\n")
-
-    msg = "\n".join(p.rstrip("\n") for p in parts)
-    if len(msg) > 4000:  # Telegram message limit is 4096; cut at a line boundary
-        msg = msg[:4000].rsplit("\n", 1)[0]
-    return msg
-
-
-# ================== REPEAT SKIPPING ==================
-def make_signature(a):
-    htf_bias = a["htf"]["bias"] if a["htf"] else "NA"
-    sweep_name = a["sweep"]["name"] if a["sweep"] else "none"
-    return "|".join([
-        a["phase"], a["bias"], str(a["break_kind"]), htf_bias,
-        f"zone={int(a['in_zone'])}", f"fvg={int(a['in_fvg'] is not None)}", f"sweep={sweep_name}",
-    ])
-
-
-def load_state():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_state(signature):
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump({"signature": signature, "last_post_utc": now_utc().isoformat()}, f)
-    except Exception as e:
-        print("Could not save state:", e)
-
-
-def should_post(signature):
-    if not SKIP_REPEATS:
-        return True, "repeat-skipping is off"
-    st = load_state()
-    if st.get("signature") != signature:
-        return True, "setup changed"
-    last = st.get("last_post_utc")
-    if not last:
-        return True, "no previous post time"
-    if FORCE_POST_HOURS > 0:
-        try:
-            age_h = (now_utc() - datetime.fromisoformat(last)).total_seconds() / 3600
-            if age_h >= FORCE_POST_HOURS:
-                return True, f"heartbeat ({age_h:.1f}h since last post)"
-        except Exception:
-            return True, "could not read last post time"
-    return False, "same setup as the last post"
-
-
-# ================== SEND ==================
-def _telegram_post(method, data, files=None):
-    import requests
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-    last = None
-    for attempt in range(1, 4):
-        try:
-            resp = requests.post(url, data=data, files=files, timeout=30)
-            last = resp.json()
-            if last.get("ok"):
-                return last
-        except Exception as e:
-            last = {"ok": False, "error": str(e)}
-        if attempt < 3:
-            time.sleep(2 * attempt)
-            if files:  # rewind the file so the retry re-sends the full image
-                for f in files.values():
-                    f.seek(0)
-    return last
-
-
-def send_telegram_update(photo_path, caption, message):
-    with open(photo_path, "rb") as photo:
-        r1 = _telegram_post("sendPhoto",
-                            {"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
-                            files={"photo": photo})
-    if not r1.get("ok"):
-        return r1
-    return _telegram_post("sendMessage",
-                          {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML",
-                           "disable_web_page_preview": True})
-
-
 # ================== MAIN ==================
+def full_analysis(df, htf):
+    """Runs everything once and returns one dict that both the chart and
+    the message use, so they always agree."""
+    (notes, bias, break_kind, break_index, break_level, swings_high,
+     swings_low, order_block, displacement_hit, atr_val, break_pos) = analyze_structure_deep(df)
+
+    levels, key_levels = build_levels(df, swings_high, swings_low, atr_val)
+    ph = classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
+                        displacement_hit, atr_val, levels, break_pos)
+
+    zones = []
+    if bias in ("Bullish", "Bearish"):
+        swings_for_ob = swings_low if bias == "Bullish" else swings_high
+        zones = find_order_blocks_multi(df, bias, swings_for_ob, lookback=OB_LOOKBACK, max_zones=3)
+
+    price = float(df["Close"].iloc[-1])
+    in_zone = any(z["low"] <= price <= z["high"] for z in zones)
+
+    fvgs = detect_fvgs(df, atr_val)
+    in_fvg = next((f for f in fvgs if f["bottom"] <= price <= f["top"]), None)
+    pd_info = premium_discount(price, swings_high, swings_low)
+    session_name, session_note = current_session()
+    align_state, align_text = htf_alignment(bias, htf)
+    inv = invalidation_level(bias, ph["phase"], swings_high, swings_low, ph["sweep"])
+
+    extra_notes = list(notes)
+    if ph["sweep"] and ph["phase"] != "Potential Reversal":
+        s = ph["sweep"]
+        extra_notes.append(
+            f"{s['side'].capitalize()} liquidity ({s['name']}) swept at {s['level']:,.2f} ({s['dir']} rejection)"
+        )
+    if in_zone:
+        extra_notes.append("Price is inside an order-block zone")
+    if in_fvg:
+        extra_notes.append(f"Price is inside a {in_fvg['kind']} FVG ({in_fvg['bottom']:,.2f} – {in_fvg['top']:,.2f})")
+
+    a = {
+        "notes": extra_notes,
+        "bias": bias,
+        "break_kind": break_kind,
+        "break_index": break_index,
+        "break_level": break_level,
+        "break_pos": break_pos,
+        "swings_high": swings_high,
+        "swings_low": swings_low,
+        "order_block": order_block,
+        "zones": zones,
+        "in_zone": in_zone,
+        "fvgs": fvgs,
+        "in_fvg": in_fvg,
+        "pd": pd_info,
+        "key_levels": key_levels,
+        "session": session_name,
+        "session_note": session_note,
+        "htf": htf,
+        "align_state": align_state,
+        "align_text": align_text,
+        "invalidation": inv,
+        "displacement_hit": displacement_hit,
+        "atr": atr_val,
+        "price": price,
+        **ph,
+    }
+    a["projection"] = build_projection(a, price)
+    open_trade, last_closed = load_open_trade()
+    a["open_trade"] = open_trade
+    a["last_closed"] = last_closed
+    a["trade"] = build_trade_idea(a, price)
+    a["guidance"] = position_guidance(a, price, open_trade, last_closed)
+    return a
+
+
 def main():
     if not is_forex_market_open():
         print("Forex market is closed (weekend) — skipping this run to avoid posting a stale-data update.")
@@ -1485,7 +1593,8 @@ def main():
 
         if result.get("ok"):
             save_state(signature)
-            print(f"Update sent ({reason}) — phase: {analysis['phase']} / bias: {analysis['bias']}")
+            print(f"Update sent ({reason}) — phase: {analysis['phase']} / bias: {analysis['bias']} / "
+                  f"guidance: {analysis['guidance']['action']}")
         else:
             print("Error:", result)
 
