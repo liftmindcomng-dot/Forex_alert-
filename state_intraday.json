@@ -35,17 +35,17 @@
       "bos": [
         4157.40564,
         4166.74854,
-        143
+        142
       ],
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 3.603098130129201,
+      "atr": 3.4477810916065783,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4157.532025,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-13T23:30:26.962480+00:00"
+      "fetched_at": "2026-10-13T23:45:21.682724+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
