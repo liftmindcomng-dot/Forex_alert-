@@ -9,7 +9,8 @@ Feed: Twelve Data XAU/USD spot (TWELVE_DATA_API_KEY).
 What it does each run:
   1. Fetches the main timeframe (default 30min) AND a higher timeframe
      (default 4h) with retries, and skips the post if the last candle is stale.
-  2. Structure: swings, BOS vs CHoCH, displacement, order blocks.
+  2. Structure: swings, BOS vs CHoCH (one shared scan for chart AND message),
+     displacement, order blocks.
   3. Market phase: Continuation / Reversal / Pullback / Trend Leg /
      Invalidation Risk / Potential Reversal / Range, with a confirmation
      status (displacement + retest).
@@ -565,7 +566,7 @@ def detect_structure_events(df, left=SWING_LOOKBACK, right=SWING_LOOKBACK):
     direction of the current trend is a BOS, a break against it is a CHoCH.
     The very first break (no trend known yet) is recorded with kind None and
     isn't labeled. Returns a list of dicts: kind, dir ("bull"/"bear"),
-    level, from_pos, to_pos."""
+    level, from_pos, to_pos. Used by BOTH the analysis (message) and the chart."""
     d = detect_swings(df, left, right)
     highs = d["Swing_High"].values
     lows = d["Swing_Low"].values
@@ -747,8 +748,9 @@ def invalidation_level(bias, phase, swings_high, swings_low, sweep):
 def build_trade_idea(a, price):
     """Informational only. Entry zone = nearest aligned order block / FVG
     on the pullback side of price; stop = beyond the invalidation level
-    plus an ATR buffer; targets at 1R / 2R / 3R. Returns None if there's no
-    sensible setup."""
+    plus an ATR buffer; targets at 1R / 2R / 3R. A trade idea is marked
+    conditional unless the structure is confirmed. Returns None if there's
+    no sensible setup."""
     phase, bias = a["phase"], a["bias"]
     atr_val, inv = a["atr"], a["invalidation"]
     if phase in ("Range", "Invalidation Risk") or not atr_val or not inv:
@@ -977,7 +979,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     W = len(plot_df)
     offset_start = len(df) - W
     last_x = W - 1
-    xmax = last_x + 0.30 * W
+    xmax = last_x + 0.34 * W
     has_vol = "Volume" in plot_df.columns and plot_df["Volume"].sum() > 0
 
     # ---- y range (includes the projection so nothing is cut off) ----
@@ -1035,7 +1037,7 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     edges, up_w, dn_w = volume_profile(plot_df)
     tot = up_w + dn_w
     if tot.max() > 0:
-        scale = 0.16 * W / tot.max()
+        scale = 0.07 * W / tot.max()
         yc = (edges[:-1] + edges[1:]) / 2
         bh = (edges[1] - edges[0]) * 0.85
         ax.barh(yc, -dn_w * scale, left=xmax, height=bh, color="#f3b6c8", alpha=0.65, zorder=0.7)
@@ -1102,8 +1104,8 @@ def create_chart(df, a, filename="xauusd_chart.png"):
         ax.add_patch(plt.Rectangle((0, band_lo), last_x * 0.62, band_hi - band_lo,
                                    fc="#a5d6a7" if d == 1 else "#f4a6b8", ec="none", alpha=0.55, zorder=0.6))
         ax.axhline(S, color="#455a64", ls=(0, (4, 3)), lw=0.9, zorder=1.2)
-        ax.text(last_x * 0.32, S, "Potential Liquidity Re-Sweep Zone", ha="center", va="center",
-                fontsize=11, color="#263238", zorder=6,
+        ax.text(last_x + 0.12 * W, S, "Potential Liquidity\nRe-Sweep Zone", ha="left", va="center",
+                fontsize=9, color="#263238", zorder=6,
                 bbox=dict(boxstyle="square,pad=0.35", fc="white", ec="#e53935", lw=1.4))
         bub_col = "#66bb6a" if d == 1 else "#e57390"
         ax.annotate("Potential Retest – Another Liquidity Sweep",
@@ -1169,9 +1171,9 @@ def create_chart(df, a, filename="xauusd_chart.png"):
     inv = a["invalidation"]
     if inv and in_view(inv["price"]):
         ax.axhline(inv["price"], ls=":", lw=1.3, color="#b71c1c", zorder=2)
-        ax.text(0.60, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
+        ax.text(0.02, inv["price"], f"Invalidation ({inv['side']}) {inv['price']:,.2f}",
                 transform=yt, fontsize=8, fontweight="bold", color="#b71c1c",
-                va="bottom" if inv["side"] == "below" else "top", ha="left", zorder=6)
+                va="top" if inv["side"] == "below" else "bottom", ha="left", zorder=6)
 
     # ---- liquidity sweep that already happened ----
     sweep = a["sweep"]
@@ -1294,6 +1296,7 @@ def position_guidance(a, price, open_trade, last_closed):
     """One suggested action, informational only.
     With an open trade:  Hold / Move to breakeven / Exit / Stop reached.
     Without one:         Fresh entry / Re-entry / Wait / Don't enter.
+    Fresh entry needs a confirmed structure AND price inside the entry zone.
     Re-entry means the last recorded trade in the same direction was stopped
     out and the setup is valid again. Returns {"action", "detail", "key"}."""
     bias, phase = a["bias"], a["phase"]
