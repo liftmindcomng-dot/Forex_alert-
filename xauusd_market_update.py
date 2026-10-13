@@ -748,8 +748,9 @@ def invalidation_level(bias, phase, swings_high, swings_low, sweep):
 def build_trade_idea(a, price):
     """Informational only. Entry zone = nearest aligned order block / FVG
     on the pullback side of price; stop = beyond the invalidation level
-    plus an ATR buffer; targets at 1R / 2R / 3R. Returns None if there's no
-    sensible setup."""
+    plus an ATR buffer; targets at 1R / 2R / 3R. A trade idea is marked
+    conditional unless the structure is confirmed. Returns None if there's
+    no sensible setup."""
     phase, bias = a["phase"], a["bias"]
     atr_val, inv = a["atr"], a["invalidation"]
     if phase in ("Range", "Invalidation Risk") or not atr_val or not inv:
@@ -799,7 +800,7 @@ def build_trade_idea(a, price):
 
     targets = [entry + direction * risk * r for r in (1, 2, 3)]
 
-    conditional = phase in ("Reversal", "Potential Reversal") and not a["confirmation"].startswith("Confirmed")
+    conditional = not a["confirmation"].startswith("Confirmed")
     return {
         "direction": "LONG" if direction == 1 else "SHORT",
         "zone_name": zone_name,
@@ -902,6 +903,7 @@ def position_guidance(a, price, open_trade, last_closed):
     """One suggested action, informational only.
     With an open trade:  Hold / Move to breakeven / Exit / Stop reached.
     Without one:         Fresh entry / Re-entry / Wait / Don't enter.
+    Fresh entry needs a confirmed structure AND price inside the entry zone.
     Re-entry means the last recorded trade in the same direction was stopped
     out and the setup is valid again. Returns {"action", "detail", "key"}."""
     bias, phase = a["bias"], a["phase"]
@@ -945,6 +947,14 @@ def position_guidance(a, price, open_trade, last_closed):
         return {"action": "Wait",
                 "detail": "A setup is forming but not confirmed yet. Wait for the structure break and retest.",
                 "key": "wait"}
+    if t["zone"] is not None:
+        zlo, zhi = t["zone"]
+        if not (zlo <= price <= zhi):
+            gap = zlo - price if price < zlo else price - zhi
+            return {"action": "Wait",
+                    "detail": f"Setup is confirmed but price is {gap:,.2f} from the entry zone "
+                              f"{zlo:,.2f} – {zhi:,.2f}. Wait for price to reach the zone.",
+                    "key": "wait_zone"}
     same_as_stopped = (last_closed is not None and last_closed.get("result") == "stopped"
                        and last_closed["direction"] == t["direction"])
     if same_as_stopped:
@@ -1005,10 +1015,16 @@ def create_message(a, price):
     # premium / discount
     pdi = a["pd"]
     if pdi:
-        parts.append(
-            f"<b>Location:</b> {pdi['label']} ({pdi['pct'] * 100:.0f}% of range "
-            f"{pdi['lo']:,.2f} – {pdi['hi']:,.2f}, EQ {pdi['eq']:,.2f})\n"
-        )
+        if pdi["label"] in ("Above range", "Below range"):
+            parts.append(
+                f"<b>Location:</b> {pdi['label'].lower().replace(' range', '')} the swing range "
+                f"({pdi['lo']:,.2f} – {pdi['hi']:,.2f})\n"
+            )
+        else:
+            parts.append(
+                f"<b>Location:</b> {pdi['label']} ({pdi['pct'] * 100:.0f}% of range "
+                f"{pdi['lo']:,.2f} – {pdi['hi']:,.2f}, EQ {pdi['eq']:,.2f})\n"
+            )
 
     # key levels
     if a["key_levels"]:
