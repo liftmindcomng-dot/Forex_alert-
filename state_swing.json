@@ -44,7 +44,7 @@
       "bos": [
         4164.86217,
         4155.93051,
-        111
+        110
       ],
       "zones": [
         {
@@ -56,11 +56,11 @@
       "liquidity_ok": false,
       "sr_ok": true,
       "displacement_hit": true,
-      "atr": 2.364705601502606,
+      "atr": 2.983476019872977,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 4164.864535000001,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-18T22:55:23.689618+00:00"
+      "fetched_at": "2026-10-18T23:45:25.209143+00:00"
     },
     "order_blocks": [
       {
@@ -76,7 +76,7 @@
         "bot": 4171.98426,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -84,7 +84,7 @@
         "bot": 4177.10808,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -102,6 +102,14 @@
         "direction": "bullish",
         "active": true,
         "is_choch": false
+      },
+      {
+        "top": 4167.36372,
+        "bot": 4155.93051,
+        "type": "order_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
       }
     ],
     "last_market_update": {
@@ -110,22 +118,47 @@
     },
     "breaker_blocks": [
       {
-        "top": 4292.95097,
-        "bot": 4285.22455,
-        "type": "breaker_block",
-        "direction": "bullish",
-        "active": false,
-        "is_choch": false
-      },
-      {
         "top": 4294.24142,
         "bot": 4284.58277,
         "type": "breaker_block",
         "direction": "bullish",
         "active": false,
         "is_choch": false
+      },
+      {
+        "top": 4180.10026,
+        "bot": 4171.98426,
+        "type": "breaker_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4179.14381,
+        "bot": 4177.10808,
+        "type": "breaker_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
       }
     ],
-    "mitigation_blocks": []
+    "mitigation_blocks": [
+      {
+        "top": 4180.10026,
+        "bot": 4171.98426,
+        "type": "mitigation_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4179.14381,
+        "bot": 4177.10808,
+        "type": "mitigation_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      }
+    ]
   }
 }
