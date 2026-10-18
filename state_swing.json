@@ -44,7 +44,7 @@
       "bos": [
         4164.86217,
         4155.93051,
-        112
+        111
       ],
       "zones": [
         {
@@ -56,11 +56,11 @@
       "liquidity_ok": false,
       "sr_ok": true,
       "displacement_hit": true,
-      "atr": 1.2303795816508032,
+      "atr": 2.364705601502606,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 4164.864535000001,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-18T22:00:24.779269+00:00"
+      "fetched_at": "2026-10-18T22:55:23.689618+00:00"
     },
     "order_blocks": [
       {
@@ -94,6 +94,14 @@
         "direction": "bullish",
         "active": true,
         "is_choch": true
+      },
+      {
+        "top": 4167.36372,
+        "bot": 4155.93051,
+        "type": "order_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
       }
     ],
     "last_market_update": {
