@@ -36,26 +36,16 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4166.1459,
-        4188.09676,
-        136
-      ],
-      "zones": [
-        {
-          "high": 4186.06318,
-          "low": 4174.49384,
-          "type": "order_block"
-        }
-      ],
+      "bos": null,
+      "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 10.180362344938246,
+      "displacement_hit": false,
+      "atr": 9.968886577774269,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 4165.10488,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-19T14:30:29.425672+00:00"
+      "fetched_at": "2026-10-19T15:25:20.188994+00:00"
     },
     "order_blocks": [
       {
