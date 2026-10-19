@@ -41,26 +41,16 @@
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": [
-        4164.86217,
-        4155.93051,
-        108
-      ],
-      "zones": [
-        {
-          "high": 4167.36372,
-          "low": 4155.93051,
-          "type": "order_block"
-        }
-      ],
-      "liquidity_ok": false,
+      "bos": null,
+      "zones": [],
+      "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 4.692415168376419,
-      "structure_seq": "Lower Highs, Lower Lows",
-      "liquidity_zone": 4164.583776666666,
+      "displacement_hit": false,
+      "atr": 5.2924346223676295,
+      "structure_seq": "an expanding range (Higher Highs, Lower Lows)",
+      "liquidity_zone": 4187.670135,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-19T01:35:19.409572+00:00"
+      "fetched_at": "2026-10-19T02:25:27.764139+00:00"
     },
     "order_blocks": [
       {
