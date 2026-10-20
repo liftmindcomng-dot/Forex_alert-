@@ -46,36 +46,16 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4137.00422,
-        4176.40753,
-        141
-      ],
-      "zones": [
-        {
-          "high": 4174.17765,
-          "low": 4161.09255,
-          "type": "order_block"
-        },
-        {
-          "high": 4186.20228,
-          "low": 4170.33349,
-          "type": "order_block"
-        },
-        {
-          "high": 4186.55279,
-          "low": 4171.55491,
-          "type": "order_block"
-        }
-      ],
+      "bos": null,
+      "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 8.860787286727058,
+      "displacement_hit": false,
+      "atr": 9.177303655949032,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4136.668885,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-20T02:00:28.322181+00:00"
+      "fetched_at": "2026-10-20T02:55:23.914155+00:00"
     },
     "order_blocks": [
       {
