@@ -2,7 +2,8 @@
 Standalone XAUUSD Market Update poster.
 
 Separate from forex_alert.py by design. Posts a narrative structure chart
-to Telegram. Skips weekends (same guard as forex_alert.py).
+to Telegram. Skips weekends and optional skip dates (same guard as
+forex_alert.py).
 
 Feed: Twelve Data XAU/USD spot (TWELVE_DATA_API_KEY).
 
@@ -22,7 +23,7 @@ What it does each run:
   8. Skips near-identical repeat posts (state file), with a heartbeat post.
   9. Position guidance from open_trade.json (open trade or last stop-out):
      Fresh entry / Re-entry / Wait / Don't enter, or Hold / Move to breakeven /
-     Exit / Stop reached. Informational only.
+     Exit / Stop reached / Check trade file. Informational only.
 
 Chart style: TradingView-like SMC layout drawn with plain matplotlib
 (mplfinance is no longer needed): cyan gradient background, structure box,
@@ -37,6 +38,7 @@ import json
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -89,17 +91,24 @@ IMPULSE_ATR_MULT = float(os.getenv("IMPULSE_ATR_MULT", "4.0"))   # min size of a
 IMPULSE_MAX_BARS = int(os.getenv("IMPULSE_MAX_BARS", "14"))
 PROFILE_BINS = int(os.getenv("PROFILE_BINS", "40"))
 MAX_TARGET_ATR = float(os.getenv("MAX_TARGET_ATR", "8"))         # ignore "price range" levels farther than this
+CHART_FILE = "xauusd_chart.png"
 
 # repeat-skipping
 SKIP_REPEATS = os.getenv("SKIP_REPEATS", "true").lower() == "true"
 FORCE_POST_HOURS = float(os.getenv("FORCE_POST_HOURS", "4"))     # 0 = never force a heartbeat post
 STATE_FILE = os.getenv("XAU_STATE_FILE", "state_xau_update.json")
 OPEN_TRADE_FILE = os.getenv("XAU_OPEN_TRADE_FILE", "open_trade.json")   # written by you or the EA
+OPEN_TRADE_MAX_AGE_HOURS = float(os.getenv("OPEN_TRADE_MAX_AGE_HOURS", "12"))
 
 # data safety
 FETCH_RETRIES = int(os.getenv("FETCH_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "3"))
+RATE_LIMIT_WAIT = float(os.getenv("RATE_LIMIT_WAIT", "60"))      # Twelve Data credit windows are per minute
 STALE_BARS = int(os.getenv("STALE_BARS", "3"))
+# Days to skip entirely (UTC, YYYY-MM-DD, comma-separated), e.g. "2026-12-25,2027-01-01"
+SKIP_DATES = {d.strip() for d in os.getenv("XAU_SKIP_DATES", "").split(",") if d.strip()}
+
+TELEGRAM_CHUNK = 4000   # Telegram message limit is 4096
 
 PHASE_COLORS = {
     "Continuation": "#2e7d32",
@@ -113,6 +122,15 @@ PHASE_COLORS = {
 
 
 # ================== HELPERS ==================
+def scrub(text):
+    """Remove secrets (API key, bot token) from any text before printing it."""
+    s = str(text)
+    for secret in (TWELVE_DATA_API_KEY, BOT_TOKEN):
+        if secret:
+            s = s.replace(secret, "***")
+    return s
+
+
 def interval_minutes(interval):
     s = interval.lower().strip()
     if s.endswith("min"):
@@ -131,8 +149,11 @@ def now_utc():
 # ================== MARKET HOURS ==================
 def is_forex_market_open():
     """Closed all day Saturday, closed Friday from 22:00 UTC, closed
-    Sunday until 22:00 UTC. Same rule as forex_alert.py."""
+    Sunday until 22:00 UTC, and closed on any date listed in XAU_SKIP_DATES.
+    Same weekend rule as forex_alert.py."""
     now = now_utc()
+    if now.strftime("%Y-%m-%d") in SKIP_DATES:
+        return False
     weekday, hour = now.weekday(), now.hour
     if weekday == 5:
         return False
@@ -158,9 +179,16 @@ def current_session():
 
 
 # ================== LIVE DATA (Twelve Data, spot XAU/USD) ==================
+def _is_rate_limit(msg):
+    m = str(msg).lower()
+    return "limit" in m or "credit" in m or "429" in m
+
+
 def fetch_candles(pair, interval, outputsize):
     """Fetch candles with retries. Raises RuntimeError if every attempt fails.
-    Volume is included when the feed provides it (otherwise 0)."""
+    Rate-limit responses wait RATE_LIMIT_WAIT seconds instead of the short
+    backoff, since the quota resets per minute. Volume is included when the
+    feed provides it (otherwise 0)."""
     if not TWELVE_DATA_API_KEY:
         raise RuntimeError("TWELVE_DATA_API_KEY is not set.")
 
@@ -175,17 +203,25 @@ def fetch_candles(pair, interval, outputsize):
     data = None
     last_err = None
     for attempt in range(1, FETCH_RETRIES + 1):
+        wait = RETRY_DELAY * attempt
         try:
             with urllib.request.urlopen(url, timeout=20) as resp:
-                data = json.loads(resp.read().decode())
-            if data.get("values"):
+                payload = json.loads(resp.read().decode())
+            if payload.get("values"):
+                data = payload
                 break
-            last_err = RuntimeError(data.get("message", data))
+            msg = payload.get("message", payload)
+            last_err = RuntimeError(scrub(msg))
+            if _is_rate_limit(msg):
+                wait = RATE_LIMIT_WAIT
+        except urllib.error.HTTPError as e:
+            last_err = RuntimeError(f"HTTP {e.code}")
+            if e.code == 429:
+                wait = RATE_LIMIT_WAIT
         except Exception as e:
-            last_err = e
-        data = None
+            last_err = RuntimeError(scrub(e))
         if attempt < FETCH_RETRIES:
-            time.sleep(RETRY_DELAY * attempt)
+            time.sleep(wait)
 
     if data is None:
         raise RuntimeError(f"Twelve Data failed [{pair} {interval}] after {FETCH_RETRIES} attempts: {last_err}")
@@ -206,8 +242,10 @@ def fetch_candles(pair, interval, outputsize):
 
 
 def get_live_data(pair=PAIR, interval=INTERVAL, outputsize=OUTPUT_SIZE):
+    """Returns the candles and the unrounded last close. Rounding happens only
+    when displaying, so the analysis and the message use the same price."""
     df = fetch_candles(pair, interval, outputsize)
-    return df, round(df["Close"].iloc[-1], 2)
+    return df, float(df["Close"].iloc[-1])
 
 
 def check_fresh(df):
@@ -239,15 +277,15 @@ def atr(df, period=ATR_PERIOD):
 
 # ================== SWING DETECTION ==================
 def detect_swings(df, left=SWING_LOOKBACK, right=SWING_LOOKBACK):
+    """A swing high is a bar whose high equals the max of the window of
+    `left` bars before it and `right` bars after it (same rule as before,
+    vectorized). Requires left == right so the centered window lines up."""
     df = df.copy()
-    df["Swing_High"] = np.nan
-    df["Swing_Low"] = np.nan
-
-    for i in range(left, len(df) - right):
-        if df["High"].iloc[i] == df["High"].iloc[i - left:i + right + 1].max():
-            df.loc[df.index[i], "Swing_High"] = df["High"].iloc[i]
-        if df["Low"].iloc[i] == df["Low"].iloc[i - left:i + right + 1].min():
-            df.loc[df.index[i], "Swing_Low"] = df["Low"].iloc[i]
+    w = left + right + 1
+    hi_roll = df["High"].rolling(w, center=True).max()
+    lo_roll = df["Low"].rolling(w, center=True).min()
+    df["Swing_High"] = df["High"].where(df["High"] == hi_roll)
+    df["Swing_Low"] = df["Low"].where(df["Low"] == lo_roll)
     return df
 
 
@@ -378,7 +416,7 @@ def get_htf_context():
         res = analyze_structure_deep(htf_df, use_events=False)
         return {"bias": res[1], "interval": HTF_INTERVAL.upper(), "notes": res[0]}
     except Exception as e:
-        print("HTF fetch failed (continuing without it):", e)
+        print("HTF fetch failed (continuing without it):", scrub(e))
         return None
 
 
@@ -623,6 +661,26 @@ def find_impulse_legs(df, atr_val, max_legs=2):
     return legs[-max_legs:]
 
 
+def impulse_leg(swings_high, swings_low, bias):
+    """The most recent impulse in the trend direction: the swing that
+    started it to the swing that ended it. Returns (start, end) or None."""
+    if not len(swings_high) or not len(swings_low):
+        return None
+    if bias == "Bullish":
+        end_idx = swings_high.index[-1]
+        prior = swings_low[swings_low.index < end_idx]
+        if not len(prior):
+            return None
+        return float(prior["Swing_Low"].iloc[-1]), float(swings_high["Swing_High"].iloc[-1])
+    if bias == "Bearish":
+        end_idx = swings_low.index[-1]
+        prior = swings_high[swings_high.index < end_idx]
+        if not len(prior):
+            return None
+        return float(prior["Swing_High"].iloc[-1]), float(swings_low["Swing_Low"].iloc[-1])
+    return None
+
+
 def volume_profile(plot_df, bins=PROFILE_BINS):
     """Horizontal profile of where price spent its time (weighted by volume
     when the feed has it). Returns (edges, up_weights, down_weights)."""
@@ -669,15 +727,17 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
                 touched = (recent["High"] >= break_level - tol) & (recent["Close"] <= break_level)
                 retest_held = bool(touched.any() and close < break_level)
 
+    # Depth is measured against the most recent impulse (start -> end of the
+    # trend move), not against the latest high/low, which bound the pullback.
     depth = None
     depth_label = None
     pull_dist = 0.0
-    if bias in ("Bullish", "Bearish") and len(swings_high) and len(swings_low):
-        last_sh = swings_high["Swing_High"].iloc[-1]
-        last_sl = swings_low["Swing_Low"].iloc[-1]
-        leg = last_sh - last_sl
+    leg_pts = impulse_leg(swings_high, swings_low, bias)
+    if leg_pts:
+        start, end = leg_pts
+        leg = abs(end - start)
+        pull_dist = (end - close) if bias == "Bullish" else (close - end)
         if leg > 0:
-            pull_dist = (last_sh - close) if bias == "Bullish" else (close - last_sl)
             depth = pull_dist / leg
             if depth < 0.382:
                 depth_label = "shallow"
@@ -934,10 +994,13 @@ def full_analysis(df, htf):
         **ph,
     }
     a["projection"] = build_projection(a, price)
-    open_trade, last_closed = load_open_trade()
+
+    open_trade, last_closed, trade_warning = load_trade_state()
     a["open_trade"] = open_trade
     a["last_closed"] = last_closed
-    a["trade"] = build_trade_idea(a, price)
+    a["trade_warning"] = trade_warning
+    # No trade idea while a trade is open or the trade file can't be trusted.
+    a["trade"] = None if (open_trade or trade_warning) else build_trade_idea(a, price)
     a["guidance"] = position_guidance(a, price, open_trade, last_closed)
     return a
 
@@ -967,7 +1030,7 @@ def _draw_candles(ax, d, up="#26a69a", down="#ef5350"):
            edgecolor=colors, linewidth=0.5, zorder=2.1)
 
 
-def create_chart(df, a, filename="xauusd_chart.png"):
+def _draw_chart(df, a, filename):
     bias, phase = a["bias"], a["phase"]
     atr_val = a["atr"] or 1.0
     price = float(df["Close"].iloc[-1])
@@ -1206,7 +1269,8 @@ def create_chart(df, a, filename="xauusd_chart.png"):
                     xytext=(0, 32 if is_high else -32), textcoords="offset points", zorder=6,
                     arrowprops=dict(arrowstyle="simple,head_width=1.2,head_length=1.0,tail_width=0.5",
                                     fc=col, ec=col, mutation_scale=16, shrinkA=0, shrinkB=3))
-        side = -1 if pos >= 14 else 1
+        # labels sit on the side with more room: left of the marker on the right half of the chart
+        side = -1 if pos >= W // 2 else 1
         ax.plot([pos + side * 0.5, pos + side * 5.0], [val, val], color="#111", lw=0.8, ls=(0, (3, 3)), zorder=3)
         ax.text(pos + side * 5.4, val, label, ha="right" if side == -1 else "left", va="center",
                 fontsize=11, color="#111", zorder=6)
@@ -1259,60 +1323,121 @@ def create_chart(df, a, filename="xauusd_chart.png"):
              bbox=dict(boxstyle="round,pad=0.4", fc=PHASE_COLORS.get(phase, "#616161"), ec="none"))
 
     fig.savefig(filename, dpi=150, facecolor=fig.get_facecolor())
-    plt.close(fig)
     return filename
 
 
+def create_chart(df, a, filename=CHART_FILE):
+    """Draws the chart. Closes every open figure afterward, even when drawing
+    fails, so a failed run never leaks figures into the next one."""
+    try:
+        return _draw_chart(df, a, filename)
+    finally:
+        plt.close("all")
+
+
 # ================== OPEN TRADE / POSITION GUIDANCE ==================
-def load_open_trade():
+def _valid_trade(t):
+    return (isinstance(t, dict)
+            and t.get("direction") in ("LONG", "SHORT")
+            and isinstance(t.get("entry"), (int, float))
+            and isinstance(t.get("stop"), (int, float))
+            and t["entry"] != t["stop"])
+
+
+def _parse_utc(s):
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def load_trade_state():
     """Reads open_trade.json. Format:
       {
+        "updated_at":  "2026-10-20T14:30:00+00:00",
         "open":        {"direction": "LONG" or "SHORT", "entry": 4150.0,
                         "stop": 4145.0, "be_moved": false}   or null,
         "last_closed": {"direction": "LONG" or "SHORT", "entry": 4150.0,
                         "stop": 4145.0, "result": "stopped" or "closed"}   or null
       }
-    Returns (open_trade, last_closed), each None when missing or invalid.
-    Never raises: a missing or broken file just means "no trade recorded"."""
+    Returns (open_trade, last_closed, warning).
+
+    Safety rules:
+      - A missing file means "no trade recorded", with no warning.
+      - An unreadable file, or an open trade whose updated_at is missing or
+        older than OPEN_TRADE_MAX_AGE_HOURS, sets a warning. While a warning
+        is set, position guidance says "Check trade file" instead of giving
+        an entry or hold instruction.
+      - A stale file with no open trade drops last_closed, since a stale
+        stop-out should not drive re-entry logic.
+    Never raises."""
+    empty = (None, None, None)
     try:
         with open(OPEN_TRADE_FILE) as f:
             data = json.load(f)
-    except Exception:
-        return None, None
+    except FileNotFoundError:
+        return empty
+    except Exception as e:
+        return None, None, f"open_trade.json could not be read ({scrub(e)})."
 
-    def valid(t):
-        return (isinstance(t, dict)
-                and t.get("direction") in ("LONG", "SHORT")
-                and isinstance(t.get("entry"), (int, float))
-                and isinstance(t.get("stop"), (int, float))
-                and t["entry"] != t["stop"])
+    if not isinstance(data, dict):
+        return None, None, "open_trade.json has the wrong format."
 
-    op = data.get("open") if isinstance(data, dict) else None
-    lc = data.get("last_closed") if isinstance(data, dict) else None
-    return (op if valid(op) else None), (lc if valid(lc) else None)
+    op = data.get("open") if _valid_trade(data.get("open")) else None
+    lc = data.get("last_closed") if _valid_trade(data.get("last_closed")) else None
+
+    updated = _parse_utc(data.get("updated_at"))
+    warning = None
+    if op is not None or lc is not None:
+        if updated is None:
+            age_note = "has no valid updated_at field, so its age is unknown"
+            stale = True
+        else:
+            age_h = (now_utc() - updated).total_seconds() / 3600
+            stale = age_h > OPEN_TRADE_MAX_AGE_HOURS
+            age_note = f"was last updated {age_h:.1f} h ago (limit {OPEN_TRADE_MAX_AGE_HOURS:g} h)"
+        if stale:
+            if op is not None:
+                warning = (f"open_trade.json {age_note}. "
+                           f"Update it to confirm the {op['direction']} is still open.")
+            else:
+                lc = None  # old stop-out info is not used for re-entry decisions
+
+    return op, lc, warning
 
 
 def position_guidance(a, price, open_trade, last_closed):
     """One suggested action, informational only.
-    With an open trade:  Hold / Move to breakeven / Exit / Stop reached.
-    Without one:         Fresh entry / Re-entry / Wait / Don't enter.
+    With a trade-file warning:  Check trade file (no entry or hold advice).
+    With an open trade:         Hold / Move to breakeven / Exit / Stop reached.
+    Without one:                Fresh entry / Re-entry / Wait / Don't enter.
     Fresh entry needs a confirmed structure AND price inside the entry zone.
     Re-entry means the last recorded trade in the same direction was stopped
     out and the setup is valid again. Returns {"action", "detail", "key"}."""
     bias, phase = a["bias"], a["phase"]
     t = a["trade"]
 
+    if a.get("trade_warning"):
+        return {"action": "Check trade file",
+                "detail": a["trade_warning"] + " Guidance is paused until it is updated.",
+                "key": "check"}
+
     if open_trade:
         d = 1 if open_trade["direction"] == "LONG" else -1
         entry, stop = float(open_trade["entry"]), float(open_trade["stop"])
-        risk = abs(entry - stop)
-        progress = (price - entry) * d / risk          # in R; negative = against us
-        through_stop = (price - stop) * d <= 0
+        be_moved = bool(open_trade.get("be_moved"))
+        risk = abs(entry - stop)                        # R is always measured from the original stop
+        effective_stop = entry if be_moved else stop    # after a breakeven move, the live stop is entry
+        progress = (price - entry) * d / risk           # in R; negative = against us
+        through_stop = (price - effective_stop) * d <= 0
         structure_against = (bias == "Bullish" and d == -1) or (bias == "Bearish" and d == 1)
 
         if through_stop:
             return {"action": "Stop reached",
-                    "detail": f"Price is through the stop at {stop:,.2f}. Record the trade as closed in {OPEN_TRADE_FILE}.",
+                    "detail": f"Price is through the stop at {effective_stop:,.2f}. Record the trade as closed in {OPEN_TRADE_FILE}.",
                     "key": "stop"}
         if structure_against and phase in ("Reversal", "Continuation"):
             return {"action": "Exit",
@@ -1322,11 +1447,11 @@ def position_guidance(a, price, open_trade, last_closed):
             return {"action": "Exit",
                     "detail": "The pullback has taken more than the whole last leg. Consider reducing or closing.",
                     "key": "exit"}
-        if progress >= 1 and not open_trade.get("be_moved"):
+        if progress >= 1 and not be_moved:
             return {"action": "Move to breakeven",
                     "detail": f"Price is at {progress:.1f}R. Move the stop to entry {entry:,.2f}, then set be_moved to true.",
                     "key": "be"}
-        if open_trade.get("be_moved"):
+        if be_moved:
             detail = f"Stop is at breakeven ({entry:,.2f}) and structure still supports the trade."
         else:
             detail = f"Structure still supports the trade. Currently {progress:.1f}R, stop {stop:,.2f}."
@@ -1376,7 +1501,8 @@ def outlook_line(phase, bias):
 
 
 def create_caption(a, price):
-    """Short caption for the photo (Telegram caps captions at 1024 chars)."""
+    """Short caption for the photo (Telegram caps captions at 1024 chars;
+    this stays far below that because the content is fixed-size)."""
     htf = a["htf"]
     htf_part = f" | {htf['interval']}: {htf['bias']}" if htf else ""
     return (
@@ -1384,7 +1510,7 @@ def create_caption(a, price):
         f"Price <b>{price:,.2f}</b> | Bias: <b>{a['bias']}</b>{htf_part}\n"
         f"{a['confirmation']}\n"
         f"🧭 Guidance: <b>{a['guidance']['action']}</b>"
-    )[:1000]
+    )
 
 
 def create_message(a, price):
@@ -1464,8 +1590,8 @@ def create_message(a, price):
             f"<b>Price range targets:</b> {proj['t1']:,.2f} → {proj['t2']:,.2f}\n"
         )
 
-    # trade idea (suppressed while a trade is open; guidance covers it)
-    t = a["trade"] if not a["open_trade"] else None
+    # trade idea (suppressed while a trade is open or the trade file needs checking)
+    t = a["trade"]
     if t:
         zone_txt = f"{t['zone_name']} {t['zone'][0]:,.2f} – {t['zone'][1]:,.2f}" if t["zone"] else t["zone_name"]
         tp = " | ".join(f"TP{i + 1} {v:,.2f}" for i, v in enumerate(t["targets"]))
@@ -1478,6 +1604,9 @@ def create_message(a, price):
             f"{tp} (1R / 2R / 3R)\n"
             f"{cond}{counter}\n"
         )
+
+    if a.get("trade_warning"):
+        parts.append(f"\n⚠️ <b>Trade file:</b> {a['trade_warning']}\n")
 
     ot = a["open_trade"]
     if ot:
@@ -1493,10 +1622,23 @@ def create_message(a, price):
     bias_txt = f"<b>Bias:</b> {bias} — {outlook_line(phase, bias)}"
     parts.append("\n" + bias_txt + "\n")
 
-    msg = "\n".join(p.rstrip("\n") for p in parts)
-    if len(msg) > 4000:  # Telegram message limit is 4096; cut at a line boundary
-        msg = msg[:4000].rsplit("\n", 1)[0]
-    return msg
+    return "\n".join(p.rstrip("\n") for p in parts)
+
+
+def split_for_telegram(text, limit=TELEGRAM_CHUNK):
+    """Split on line boundaries so no HTML tag is cut in half. Every chunk
+    stays under the limit unless a single line is longer than the limit."""
+    chunks, current = [], ""
+    for line in text.split("\n"):
+        candidate = line if not current else current + "\n" + line
+        if len(candidate) > limit and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 # ================== REPEAT SKIPPING ==================
@@ -1523,7 +1665,7 @@ def save_state(signature):
         with open(STATE_FILE, "w") as f:
             json.dump({"signature": signature, "last_post_utc": now_utc().isoformat()}, f)
     except Exception as e:
-        print("Could not save state:", e)
+        print("Could not save state:", scrub(e))
 
 
 def should_post(signature):
@@ -1546,9 +1688,21 @@ def should_post(signature):
 
 
 # ================== SEND ==================
+def _rewind(files):
+    if files:
+        for f in files.values():
+            f.seek(0)
+
+
 def _telegram_post(method, data, files=None, attempts=3):
-    """Posts to Telegram. Retries network errors with a longer timeout.
-    A real Telegram error (bad HTML, too long, etc.) is returned without retrying."""
+    """Posts to Telegram with safe retries.
+
+    Retries only when the request certainly never reached Telegram:
+      - ConnectTimeout (connection never established)
+      - HTTP 429 with retry_after (Telegram rejected it before processing)
+    A ReadTimeout or other ambiguous failure is NOT retried, because Telegram
+    may have already processed the request. Retrying those is what caused
+    duplicate chart posts."""
     import requests
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     last = {"ok": False, "error": "no attempt made"}
@@ -1556,37 +1710,47 @@ def _telegram_post(method, data, files=None, attempts=3):
         try:
             resp = requests.post(url, data=data, files=files, timeout=(10, 60))
             last = resp.json()
+            if last.get("error_code") == 429:
+                wait = last.get("parameters", {}).get("retry_after", 5)
+                time.sleep(wait)
+                _rewind(files)
+                continue
             return last
+        except requests.exceptions.ConnectTimeout as e:
+            last = {"ok": False, "error": scrub(e)}
         except Exception as e:
-            last = {"ok": False, "error": str(e)}
+            return {"ok": False, "error": scrub(e), "ambiguous": True}
         if attempt < attempts:
             time.sleep(3 * attempt)
-            if files:  # rewind the file so the retry re-sends the full image
-                for f in files.values():
-                    f.seek(0)
+            _rewind(files)
     return last
 
 
 def send_telegram_update(photo_path, caption, message):
-    """Sends the chart with its short caption, then the full text.
-    Returns (photo_ok, text_ok, detail). The post counts as sent once the
-    photo is in, so a failed text message doesn't cause a duplicate photo."""
+    """Sends the chart with its short caption, then the full text in
+    line-safe chunks. Returns (photo_ok, text_ok, detail). The post counts
+    as sent once the photo is in, so a failed text message doesn't cause a
+    duplicate photo."""
     with open(photo_path, "rb") as photo:
         r1 = _telegram_post("sendPhoto",
                             {"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
                             files={"photo": photo})
     if not r1.get("ok"):
         return False, False, r1
-    r2 = _telegram_post("sendMessage",
-                        {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML",
-                         "disable_web_page_preview": True})
-    return True, bool(r2.get("ok")), r2
+
+    for chunk in split_for_telegram(message):
+        r2 = _telegram_post("sendMessage",
+                            {"chat_id": CHAT_ID, "text": chunk, "parse_mode": "HTML",
+                             "disable_web_page_preview": True})
+        if not r2.get("ok"):
+            return True, False, r2
+    return True, True, {"ok": True}
 
 
 # ================== MAIN ==================
 def main():
     if not is_forex_market_open():
-        print("Forex market is closed (weekend) — skipping this run to avoid posting a stale-data update.")
+        print("Forex market is closed (weekend or skip date) — skipping this run.")
         return
 
     try:
@@ -1614,17 +1778,17 @@ def main():
 
         if photo_ok:
             save_state(signature)
-            text_status = "full text sent" if text_ok else f"full text FAILED: {detail}"
+            text_status = "full text sent" if text_ok else f"full text FAILED: {scrub(detail)}"
             print(f"Update sent ({reason}) — phase: {analysis['phase']} / bias: {analysis['bias']} / "
                   f"guidance: {analysis['guidance']['action']} — {text_status}")
         else:
-            print("Error:", detail)
-
-        if os.path.exists(chart_file):
-            os.remove(chart_file)
+            print("Error:", scrub(detail))
 
     except Exception as e:
-        print("Error:", str(e))
+        print("Error:", scrub(e))
+    finally:
+        if os.path.exists(CHART_FILE):
+            os.remove(CHART_FILE)
 
 
 if __name__ == "__main__":
