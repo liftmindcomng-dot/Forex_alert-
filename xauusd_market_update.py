@@ -13,27 +13,30 @@ What it does each run:
   2. Structure: swings, BOS vs CHoCH (one shared scan for chart AND message),
      displacement, order blocks.
   3. Market phase: Continuation / Reversal / Pullback / Trend Leg /
-     Invalidation Risk / Potential Reversal / Range, with a confirmation
-     status (displacement + retest).
+     Invalidation Risk / Potential Reversal / Range / Breakout / Confirmed
+     Breakout, with a confirmation status (displacement + retest).
   4. HTF bias and whether the current read is aligned with it or counter-trend.
   5. Fair value gaps, premium/discount (50% line), key levels (previous day
      high/low, Asia range, equal highs/lows) and liquidity sweeps.
-  6. Session tag, invalidation level, and an informational trade idea.
+  6. Session tag, invalidation level, and a watch level. SMC reads use an
+     order block / FVG level; range breakouts use the broken edge. The bot
+     never places orders; you place them manually.
   7. Projection: liquidity re-sweep zone + two "price range" targets.
   8. Skips near-identical repeat posts (state file), with a heartbeat post.
   9. Position guidance from open_trade.json (open trade or last stop-out):
-     Fresh entry / Re-entry / Wait / Don't enter, or Hold / Move to breakeven /
-     Exit / Stop reached / Check trade file. Informational only.
+     Setup at level / Re-entry / Wait / Don't enter, or Hold / Move to
+     breakeven / Exit / Stop reached / Check trade file. Informational only.
+     You update open_trade.json by hand after each manual trade action.
 
 Chart style: TradingView-like SMC layout drawn with plain matplotlib
 (mplfinance is no longer needed): cyan gradient background, structure box,
 BOS/CHoCH lines along the whole visible history, impulse-leg boxes, supply /
 demand bands, arrow swing labels, re-sweep zone callouts, black projection
-path, price-range lines, price badges and a volume profile on the right.
+path, price-range lines, price badges, range box for breakouts, and a volume
+profile on the right.
 """
 
 import os
-import sys
 import json
 import time
 import urllib.request
@@ -72,6 +75,13 @@ RETEST_WINDOW = int(os.getenv("RETEST_WINDOW", "8"))
 RETEST_TOL_ATR_MULT = float(os.getenv("RETEST_TOL_ATR_MULT", "0.3"))
 SWEEP_WINDOW = int(os.getenv("SWEEP_WINDOW", "6"))
 
+# range breakout
+RANGE_BARS = int(os.getenv("RANGE_BARS", "20"))
+RANGE_MAX_ATR_MULT = float(os.getenv("RANGE_MAX_ATR_MULT", "2.5"))        # max range width, in ATR
+BREAK_BUFFER_ATR_MULT = float(os.getenv("BREAK_BUFFER_ATR_MULT", "0.1"))  # close must clear the edge by this much
+BREAKOUT_LOOKBACK = int(os.getenv("BREAKOUT_LOOKBACK", "10"))             # how many recent bars can hold the breakout
+BREAKOUT_STOP_MODE = os.getenv("BREAKOUT_STOP_MODE", "edge")              # "edge" = opposite range edge, "mid" = range midpoint
+
 # FVG / levels
 FVG_MIN_ATR_MULT = float(os.getenv("FVG_MIN_ATR_MULT", "0.3"))
 FVG_LOOKBACK = int(os.getenv("FVG_LOOKBACK", "60"))
@@ -80,7 +90,7 @@ EQ_TOL_ATR_MULT = float(os.getenv("EQ_TOL_ATR_MULT", "0.15"))
 ASIA_START_HOUR = int(os.getenv("ASIA_START_HOUR", "0"))         # UTC
 ASIA_END_HOUR = int(os.getenv("ASIA_END_HOUR", "7"))             # UTC
 
-# trade idea
+# trade idea (watch level only; orders are placed manually)
 SL_BUFFER_ATR_MULT = float(os.getenv("SL_BUFFER_ATR_MULT", "0.3"))
 MIN_RISK_ATR_MULT = float(os.getenv("MIN_RISK_ATR_MULT", "0.2"))
 MAX_RISK_ATR_MULT = float(os.getenv("MAX_RISK_ATR_MULT", "5.0"))
@@ -97,7 +107,7 @@ CHART_FILE = "xauusd_chart.png"
 SKIP_REPEATS = os.getenv("SKIP_REPEATS", "true").lower() == "true"
 FORCE_POST_HOURS = float(os.getenv("FORCE_POST_HOURS", "4"))     # 0 = never force a heartbeat post
 STATE_FILE = os.getenv("XAU_STATE_FILE", "state_xau_update.json")
-OPEN_TRADE_FILE = os.getenv("XAU_OPEN_TRADE_FILE", "open_trade.json")   # written by you or the EA
+OPEN_TRADE_FILE = os.getenv("XAU_OPEN_TRADE_FILE", "open_trade.json")   # updated by hand after each manual trade action
 OPEN_TRADE_MAX_AGE_HOURS = float(os.getenv("OPEN_TRADE_MAX_AGE_HOURS", "12"))
 
 # data safety
@@ -118,6 +128,8 @@ PHASE_COLORS = {
     "Invalidation Risk": "#b71c1c",
     "Potential Reversal": "#6a1b9a",
     "Range": "#616161",
+    "Breakout": "#00838f",
+    "Confirmed Breakout": "#00695c",
 }
 
 
@@ -405,6 +417,85 @@ def analyze_structure_deep(df, use_events=True):
 
     return (structure_notes, bias, break_kind, break_index, break_level,
             swings_high, swings_low, order_block, displacement_hit, atr_val, break_pos)
+
+
+# ================== RANGE BREAKOUT ==================
+def detect_range_breakout(df, atr_val):
+    """Range breakout. The range is the high and low of the RANGE_BARS bars
+    before a candle, accepted only if its width is at most RANGE_MAX_ATR_MULT
+    x ATR. A breakout is a close beyond a range edge by BREAK_BUFFER_ATR_MULT
+    x ATR, within the last BREAKOUT_LOOKBACK bars. Confirmed means the
+    breakout candle has displacement AND price retested the broken edge within
+    RETEST_WINDOW bars and is holding above (or below) it.
+
+    Returns None if there is no breakout. If the breakout has failed (price
+    closed back inside the range), returns a dict with "failed": True so the
+    guidance can exit trades in that direction."""
+    if not atr_val or len(df) < RANGE_BARS + 2:
+        return None
+    highs, lows = df["High"].values, df["Low"].values
+    closes = df["Close"].values
+    n = len(df)
+    close = float(closes[-1])
+    buf = BREAK_BUFFER_ATR_MULT * atr_val
+    tol = RETEST_TOL_ATR_MULT * atr_val
+    first = max(RANGE_BARS, n - 1 - BREAKOUT_LOOKBACK)
+
+    # newest candidate first, so the most recent breakout wins
+    for i in range(n - 1, first - 1, -1):
+        rng_hi = float(highs[i - RANGE_BARS:i].max())
+        rng_lo = float(lows[i - RANGE_BARS:i].min())
+        if rng_hi - rng_lo > RANGE_MAX_ATR_MULT * atr_val:
+            continue  # not a consolidation
+
+        if closes[i] > rng_hi + buf:
+            direction, level = "up", rng_hi
+        elif closes[i] < rng_lo - buf:
+            direction, level = "down", rng_lo
+        else:
+            continue
+
+        # failed breakout: price has closed back inside the range
+        if (direction == "up" and close < level) or (direction == "down" and close > level):
+            return {"failed": True, "dir": direction, "level": level,
+                    "range_hi": rng_hi, "range_lo": rng_lo, "pos": i,
+                    "confirmed": False, "retest": False, "displacement": False,
+                    "status": "Breakout failed — closed back inside the range"}
+
+        # retest of the broken edge, after the breakout candle, excluding the latest bar
+        start = max(i + 1, n - 1 - RETEST_WINDOW)
+        retest = False
+        if start < n - 1:
+            if direction == "up":
+                touched = (lows[start:n - 1] <= level + tol) & (closes[start:n - 1] >= level)
+                retest = bool(touched.any()) and close > level
+            else:
+                touched = (highs[start:n - 1] >= level - tol) & (closes[start:n - 1] <= level)
+                retest = bool(touched.any()) and close < level
+
+        disp = bool((highs[i] - lows[i]) >= DISPLACEMENT_ATR_MULT * atr_val)
+
+        if disp and retest:
+            status = "Confirmed breakout — displacement + retest held"
+        elif retest:
+            status = "Breakout retest held, but no displacement on the break"
+        elif disp:
+            status = "Breakout with displacement — awaiting retest"
+        else:
+            status = "Breakout — no displacement, awaiting retest"
+
+        return {
+            "dir": direction,
+            "level": level,
+            "range_hi": rng_hi,
+            "range_lo": rng_lo,
+            "pos": i,
+            "displacement": disp,
+            "retest": retest,
+            "confirmed": disp and retest,
+            "status": status,
+        }
+    return None
 
 
 # ================== HIGHER TIMEFRAME ==================
@@ -806,14 +897,14 @@ def invalidation_level(bias, phase, swings_high, swings_low, sweep):
 
 
 def build_trade_idea(a, price):
-    """Informational only. Entry zone = nearest aligned order block / FVG
-    on the pullback side of price; stop = beyond the invalidation level
-    plus an ATR buffer; targets at 1R / 2R / 3R. A trade idea is marked
-    conditional unless the structure is confirmed. Returns None if there's
-    no sensible setup."""
+    """Watch level only, no order is placed. Level = nearest aligned order
+    block / FVG on the pullback side of price; stop = beyond the invalidation
+    level plus an ATR buffer; targets at 1R / 2R / 3R. Marked conditional
+    unless the structure is confirmed. Returns None if there's no sensible
+    setup. Range breakouts are handled by build_breakout_trade()."""
     phase, bias = a["phase"], a["bias"]
     atr_val, inv = a["atr"], a["invalidation"]
-    if phase in ("Range", "Invalidation Risk") or not atr_val or not inv:
+    if phase in ("Range", "Invalidation Risk", "Breakout", "Confirmed Breakout") or not atr_val or not inv:
         return None
 
     if phase == "Potential Reversal" and a["sweep"]:
@@ -869,6 +960,47 @@ def build_trade_idea(a, price):
         "stop": stop,
         "targets": targets,
         "conditional": conditional,
+    }
+
+
+def build_breakout_trade(a, price):
+    """Range breakout watch level. Zone = the broken edge +/- the retest
+    tolerance. Level: current price if it is inside the zone, otherwise the
+    broken edge (where a manual limit would wait for the retest). Stop: beyond
+    the opposite edge of the range, or its midpoint when BREAKOUT_STOP_MODE is
+    'mid', plus an ATR buffer. Targets at 1R / 2R / 3R. Conditional until the
+    breakout is confirmed by displacement and a held retest."""
+    rb = a["range_breakout"]
+    atr_val = a["atr"]
+    if not rb or not atr_val:
+        return None
+
+    d = 1 if rb["dir"] == "up" else -1
+    tol = RETEST_TOL_ATR_MULT * atr_val
+    level = rb["level"]
+    zlo, zhi = level - tol, level + tol
+    entry = price if zlo <= price <= zhi else level
+
+    if BREAKOUT_STOP_MODE == "mid":
+        ref = (rb["range_hi"] + rb["range_lo"]) / 2
+    else:
+        ref = rb["range_lo"] if d == 1 else rb["range_hi"]
+    buffer = SL_BUFFER_ATR_MULT * atr_val
+    stop = ref - buffer if d == 1 else ref + buffer
+
+    risk = (entry - stop) * d
+    if risk < MIN_RISK_ATR_MULT * atr_val or risk > MAX_RISK_ATR_MULT * atr_val:
+        return None
+
+    targets = [entry + d * risk * r for r in (1, 2, 3)]
+    return {
+        "direction": "LONG" if d == 1 else "SHORT",
+        "zone_name": "Broken range edge",
+        "zone": (zlo, zhi),
+        "entry": entry,
+        "stop": stop,
+        "targets": targets,
+        "conditional": not rb["confirmed"],
     }
 
 
@@ -940,6 +1072,17 @@ def full_analysis(df, htf):
     ph = classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
                         displacement_hit, atr_val, levels, break_pos)
 
+    # range breakout: only relabels a plain Range; SMC phases take priority.
+    # A failed breakout is kept separately so guidance can exit trades on it.
+    rb = detect_range_breakout(df, atr_val)
+    range_failed = None
+    if rb and rb.get("failed"):
+        range_failed = rb
+        rb = None
+    if rb and ph["phase"] == "Range":
+        ph["phase"] = "Confirmed Breakout" if rb["confirmed"] else "Breakout"
+        ph["confirmation"] = rb["status"]
+
     zones = []
     if bias in ("Bullish", "Bearish"):
         swings_for_ob = swings_low if bias == "Bullish" else swings_high
@@ -960,6 +1103,10 @@ def full_analysis(df, htf):
         s = ph["sweep"]
         extra_notes.append(
             f"{s['side'].capitalize()} liquidity ({s['name']}) swept at {s['level']:,.2f} ({s['dir']} rejection)"
+        )
+    if rb:
+        extra_notes.append(
+            f"Range {rb['range_lo']:,.2f} – {rb['range_hi']:,.2f} broke {rb['dir']} at {rb['level']:,.2f}"
         )
     if in_zone:
         extra_notes.append("Price is inside an order-block zone")
@@ -991,6 +1138,8 @@ def full_analysis(df, htf):
         "displacement_hit": displacement_hit,
         "atr": atr_val,
         "price": price,
+        "range_breakout": rb,
+        "range_failed": range_failed,
         **ph,
     }
     a["projection"] = build_projection(a, price)
@@ -999,8 +1148,15 @@ def full_analysis(df, htf):
     a["open_trade"] = open_trade
     a["last_closed"] = last_closed
     a["trade_warning"] = trade_warning
-    # No trade idea while a trade is open or the trade file can't be trusted.
-    a["trade"] = None if (open_trade or trade_warning) else build_trade_idea(a, price)
+
+    # No watch level while a trade is open or the trade file can't be trusted.
+    if open_trade or trade_warning:
+        a["trade"] = None
+    elif ph["phase"] in ("Breakout", "Confirmed Breakout"):
+        a["trade"] = build_breakout_trade(a, price)
+    else:
+        a["trade"] = build_trade_idea(a, price)
+
     a["guidance"] = position_guidance(a, price, open_trade, last_closed)
     return a
 
@@ -1037,6 +1193,7 @@ def _draw_chart(df, a, filename):
     swings_high, swings_low = a["swings_high"], a["swings_low"]
     htf = a["htf"]
     proj = a["projection"]
+    rb = a["range_breakout"]
 
     plot_df = df.tail(CHART_BARS)
     W = len(plot_df)
@@ -1122,9 +1279,24 @@ def _draw_chart(df, a, filename):
         b_lo = min(v for _, v in lo_pts)
         ax.add_patch(plt.Rectangle((bx0 - 1, b_lo), last_x - bx0 + 1.5, b_hi - b_lo,
                                    fc="#8fd3dc", ec="none", alpha=0.22, zorder=0.4))
-        if bias == "Neutral":
+        if bias == "Neutral" and not rb:
             ax.text(bx0, b_hi, "Range — awaiting breakout", ha="left", va="top", fontsize=9,
                     fontweight="bold", color="#546e7a", zorder=6)
+
+    # ---- range breakout: the consolidation box and its broken edge ----
+    if rb:
+        rx0 = max(rb["pos"] - RANGE_BARS - offset_start, 0)
+        rx1 = max(rb["pos"] - offset_start, rx0 + 1)
+        rcol = "#00838f"
+        ax.add_patch(plt.Rectangle((rx0, rb["range_lo"]), last_x - rx0 + 0.5,
+                                   rb["range_hi"] - rb["range_lo"],
+                                   fc=rcol, ec=rcol, alpha=0.08, lw=0, zorder=0.45))
+        ax.add_patch(plt.Rectangle((rx0, rb["range_lo"]), rx1 - rx0,
+                                   rb["range_hi"] - rb["range_lo"],
+                                   fc="none", ec=rcol, lw=1.0, ls="--", zorder=0.46))
+        ax.plot([rx0, last_x], [rb["level"], rb["level"]], color=rcol, lw=1.0, ls=(0, (2, 2)), zorder=3)
+        ax.text(rx0 + 0.5, rb["range_hi"], f"Range breakout {rb['dir']} ({'confirmed' if rb['confirmed'] else 'pending'})",
+                fontsize=8, fontweight="bold", color=rcol, va="bottom", ha="left", zorder=6)
 
     # ---- impulse-leg boxes ----
     for leg in find_impulse_legs(df, a["atr"]):
@@ -1410,11 +1582,12 @@ def load_trade_state():
 
 
 def position_guidance(a, price, open_trade, last_closed):
-    """One suggested action, informational only.
+    """One suggested action, informational only. Orders are placed by hand.
     With a trade-file warning:  Check trade file (no entry or hold advice).
     With an open trade:         Hold / Move to breakeven / Exit / Stop reached.
-    Without one:                Fresh entry / Re-entry / Wait / Don't enter.
-    Fresh entry needs a confirmed structure AND price inside the entry zone.
+    Without one:                Setup at level / Re-entry / Wait / Don't enter.
+    Setup at level means a confirmed setup with price inside the zone. The bot
+    does not know whether you placed an order; it only reads open_trade.json.
     Re-entry means the last recorded trade in the same direction was stopped
     out and the setup is valid again. Returns {"action", "detail", "key"}."""
     bias, phase = a["bias"], a["phase"]
@@ -1439,6 +1612,13 @@ def position_guidance(a, price, open_trade, last_closed):
             return {"action": "Stop reached",
                     "detail": f"Price is through the stop at {effective_stop:,.2f}. Record the trade as closed in {OPEN_TRADE_FILE}.",
                     "key": "stop"}
+
+        rf = a.get("range_failed")
+        if rf and ((rf["dir"] == "up" and d == 1) or (rf["dir"] == "down" and d == -1)):
+            return {"action": "Exit",
+                    "detail": "The range breakout in this trade's direction has failed (price closed back inside the range). Consider closing it.",
+                    "key": "exit"}
+
         if structure_against and phase in ("Reversal", "Continuation"):
             return {"action": "Exit",
                     "detail": "A confirmed break has turned structure against the trade. Consider closing it.",
@@ -1477,10 +1657,12 @@ def position_guidance(a, price, open_trade, last_closed):
                        and last_closed["direction"] == t["direction"])
     if same_as_stopped:
         return {"action": "Re-entry",
-                "detail": f"The last {t['direction']} was stopped out. Enter again only if the retest holds, not on the first touch.",
+                "detail": f"The last {t['direction']} was stopped out. Only consider re-entering if the retest holds, not on the first touch.",
                 "key": "reentry"}
-    return {"action": "Fresh entry",
-            "detail": f"Confirmed {t['direction']} setup. Entry near {t['entry']:,.2f} with the stop at {t['stop']:,.2f}.",
+    return {"action": "Setup at level",
+            "detail": (f"Confirmed {t['direction']} setup. Price is at the level {t['entry']:,.2f}, "
+                       f"stop reference {t['stop']:,.2f}. Orders are placed manually. "
+                       f"If you take the trade, record the fill in {OPEN_TRADE_FILE}."),
             "key": "fresh"}
 
 
@@ -1496,6 +1678,8 @@ def outlook_line(phase, bias):
         "Invalidation Risk": f"Pullback has exceeded the last {d} leg. The trend is at risk of flipping {opp}.",
         "Potential Reversal": "Liquidity was taken and rejected. Wait for a break of structure to confirm direction.",
         "Range": "No trade bias until price breaks the range.",
+        "Breakout": "Range edge closed through, but the retest has not confirmed it yet.",
+        "Confirmed Breakout": "Range broken with displacement and a held retest. Direction now favors the breakout side.",
     }
     return lines.get(phase, "Wait for reaction at the zone.")
 
@@ -1560,12 +1744,18 @@ def create_message(a, price):
 
     # order block (nearest zone to price) or range
     zones = a["zones"]
+    rb = a["range_breakout"]
     if bias in ("Bullish", "Bearish"):
         if a["in_zone"]:
             parts.append("Price is reacting inside an order-block zone.\n")
         elif zones:
             z = min(zones, key=lambda zz: min(abs(price - zz["low"]), abs(price - zz["high"])))
             parts.append(f"Nearest order-block zone: {z['low']:,.2f} – {z['high']:,.2f}.\n")
+    elif rb:
+        parts.append(
+            f"<b>Range:</b> {rb['range_lo']:,.2f} – {rb['range_hi']:,.2f}. "
+            f"Breakout {rb['dir']} at {rb['level']:,.2f}, retest {'held' if rb['retest'] else 'not yet'}.\n"
+        )
     elif len(swings_high) >= 1 and len(swings_low) >= 1:
         range_hi = swings_high["Swing_High"].iloc[-1]
         range_lo = swings_low["Swing_Low"].iloc[-1]
@@ -1590,7 +1780,7 @@ def create_message(a, price):
             f"<b>Price range targets:</b> {proj['t1']:,.2f} → {proj['t2']:,.2f}\n"
         )
 
-    # trade idea (suppressed while a trade is open or the trade file needs checking)
+    # watch level (suppressed while a trade is open or the trade file needs checking)
     t = a["trade"]
     if t:
         zone_txt = f"{t['zone_name']} {t['zone'][0]:,.2f} – {t['zone'][1]:,.2f}" if t["zone"] else t["zone_name"]
@@ -1598,10 +1788,10 @@ def create_message(a, price):
         cond = "Conditional: wait for confirmation first." if t["conditional"] else "Look for a reaction at the zone."
         counter = " Counter-HTF, so size down or skip." if a["align_state"] == "counter" else ""
         parts.append(
-            f"\n🎯 <b>TRADE IDEA</b> (informational, not a signal)\n"
+            f"\n🎯 <b>WATCH LEVEL</b> (informational, no order placed by the bot)\n"
             f"<b>{t['direction']}</b> — {zone_txt}\n"
-            f"Entry ~{t['entry']:,.2f} | Stop {t['stop']:,.2f}\n"
-            f"{tp} (1R / 2R / 3R)\n"
+            f"Level ~{t['entry']:,.2f} | Stop {t['stop']:,.2f}\n"
+            f"Targets if taken: {tp} (1R / 2R / 3R)\n"
             f"{cond}{counter}\n"
         )
 
@@ -1645,10 +1835,14 @@ def split_for_telegram(text, limit=TELEGRAM_CHUNK):
 def make_signature(a):
     htf_bias = a["htf"]["bias"] if a["htf"] else "NA"
     sweep_name = a["sweep"]["name"] if a["sweep"] else "none"
+    rb = a["range_breakout"]
+    rb_part = f"rb={rb['dir']}:{int(rb['confirmed'])}" if rb else "rb=none"
+    rf = a.get("range_failed")
+    rf_part = f"rf={rf['dir']}" if rf else "rf=none"
     return "|".join([
         a["phase"], a["bias"], str(a["break_kind"]), htf_bias,
         f"zone={int(a['in_zone'])}", f"fvg={int(a['in_fvg'] is not None)}", f"sweep={sweep_name}",
-        f"guide={a['guidance']['key']}",
+        rb_part, rf_part, f"guide={a['guidance']['key']}",
     ])
 
 
