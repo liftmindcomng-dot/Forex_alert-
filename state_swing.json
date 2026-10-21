@@ -21,7 +21,7 @@
     "setup": {
       "bos_level": 4117.59862,
       "pullback_zone": 4155.90064,
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
@@ -42,7 +42,12 @@
         }
       ],
       "liquidity_ok": true,
-      "sr_ok": true
+      "sr_ok": true,
+      "last_entry_bar_time": "2026-10-21 01:45:00",
+      "duration_class": "day_swing",
+      "condition_label": "OB+BOS+LIQ+DISP",
+      "confirmed_at": "2026-10-21T01:50:34.523233+00:00",
+      "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
