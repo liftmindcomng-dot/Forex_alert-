@@ -19,48 +19,63 @@
       "fetched_at": "2026-10-21T00:40:26.471975+00:00"
     },
     "setup": {
-      "bos_level": 4115.56507,
-      "pullback_zone": 4144.39057,
-      "confirmed": true,
+      "bos_level": 4117.59862,
+      "pullback_zone": 4155.90064,
+      "confirmed": false,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
         {
-          "high": 4141.62923,
-          "low": 4140.5991,
+          "high": 4155.90064,
+          "low": 4121.67175,
           "type": "order_block"
         },
         {
-          "high": 4149.57325,
-          "low": 4143.53195,
+          "high": 4125.92318,
+          "low": 4119.97363,
           "type": "order_block"
         },
         {
-          "high": 4146.10888,
-          "low": 4137.00422,
+          "high": 4136.50465,
+          "low": 4117.13986,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": true,
+      "sr_ok": true
+    },
+    "bias": "bearish",
+    "structure_cache": {
+      "bos": [
+        4117.59862,
+        4155.90064,
+        141
+      ],
+      "zones": [
+        {
+          "high": 4155.90064,
+          "low": 4121.67175,
+          "type": "order_block"
+        },
+        {
+          "high": 4125.92318,
+          "low": 4119.97363,
+          "type": "order_block"
+        },
+        {
+          "high": 4136.50465,
+          "low": 4117.13986,
           "type": "order_block"
         }
       ],
       "liquidity_ok": true,
       "sr_ok": true,
-      "last_entry_bar_time": "2026-10-20 15:00:00",
-      "duration_class": "day_swing",
-      "condition_label": "OB+BOS+LIQ+DISP+REJ+MIT",
-      "confirmed_at": "2026-10-20T15:05:42.982013+00:00",
-      "notified": false
-    },
-    "bias": "bearish",
-    "structure_cache": {
-      "bos": null,
-      "zones": [],
-      "liquidity_ok": true,
-      "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 10.251882413072634,
+      "displacement_hit": true,
+      "atr": 10.525853619263803,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 4116.581845,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-21T00:35:23.640530+00:00"
+      "fetched_at": "2026-10-21T01:25:25.044790+00:00"
     },
     "order_blocks": [
       {
@@ -88,27 +103,27 @@
         "is_choch": false
       },
       {
-        "top": 4141.62923,
-        "bot": 4140.5991,
+        "top": 4155.90064,
+        "bot": 4121.67175,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       },
       {
-        "top": 4149.57325,
-        "bot": 4143.53195,
+        "top": 4125.92318,
+        "bot": 4119.97363,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       },
       {
-        "top": 4146.10888,
-        "bot": 4137.00422,
+        "top": 4136.50465,
+        "bot": 4117.13986,
         "type": "order_block",
         "direction": "bearish",
-        "active": false,
+        "active": true,
         "is_choch": false
       }
     ],
@@ -118,30 +133,6 @@
     },
     "breaker_blocks": [
       {
-        "top": 4294.24142,
-        "bot": 4284.58277,
-        "type": "breaker_block",
-        "direction": "bullish",
-        "active": false,
-        "is_choch": false
-      },
-      {
-        "top": 4180.10026,
-        "bot": 4171.98426,
-        "type": "breaker_block",
-        "direction": "bullish",
-        "active": false,
-        "is_choch": false
-      },
-      {
-        "top": 4179.14381,
-        "bot": 4177.10808,
-        "type": "breaker_block",
-        "direction": "bullish",
-        "active": false,
-        "is_choch": false
-      },
-      {
         "top": 4167.36372,
         "bot": 4155.93051,
         "type": "breaker_block",
@@ -186,7 +177,7 @@
         "bot": 4137.00422,
         "type": "breaker_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": false
       }
     ],
