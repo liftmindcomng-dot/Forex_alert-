@@ -59,7 +59,7 @@ TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 PAIR = os.getenv("XAU_PAIR", "XAU/USD")
 INTERVAL = os.getenv("XAU_INTERVAL", "15min")
 OUTPUT_SIZE = int(os.getenv("XAU_OUTPUTSIZE", "150"))   # raise this on 15min/5min so "previous day" is fully covered
-HTF_INTERVAL = os.getenv("XAU_HTF_INTERVAL", "4h")
+HTF_INTERVAL = os.getenv("XAU_HTF_INTERVAL", "1day")
 HTF_OUTPUTSIZE = int(os.getenv("XAU_HTF_OUTPUTSIZE", "120"))
 
 SWING_LOOKBACK = int(os.getenv("SWING_LOOKBACK", "3"))
