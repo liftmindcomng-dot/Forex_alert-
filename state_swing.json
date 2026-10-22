@@ -19,48 +19,63 @@
       "fetched_at": "2026-10-22T00:00:32.874042+00:00"
     },
     "setup": {
-      "bos_level": 4117.59862,
-      "pullback_zone": 4155.90064,
-      "confirmed": true,
+      "bos_level": 4107.11352,
+      "pullback_zone": 4142.0345,
+      "confirmed": false,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
         {
-          "high": 4155.90064,
-          "low": 4121.67175,
+          "high": 4137.07532,
+          "low": 4129.33064,
           "type": "order_block"
         },
         {
-          "high": 4125.92318,
-          "low": 4119.97363,
+          "high": 4140.44386,
+          "low": 4126.77451,
           "type": "order_block"
         },
         {
-          "high": 4136.50465,
-          "low": 4117.13986,
+          "high": 4140.95822,
+          "low": 4126.7559,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": true,
+      "sr_ok": true
+    },
+    "bias": "bearish",
+    "structure_cache": {
+      "bos": [
+        4107.11352,
+        4142.0345,
+        141
+      ],
+      "zones": [
+        {
+          "high": 4137.07532,
+          "low": 4129.33064,
+          "type": "order_block"
+        },
+        {
+          "high": 4140.44386,
+          "low": 4126.77451,
+          "type": "order_block"
+        },
+        {
+          "high": 4140.95822,
+          "low": 4126.7559,
           "type": "order_block"
         }
       ],
       "liquidity_ok": true,
       "sr_ok": true,
-      "last_entry_bar_time": "2026-10-21 01:45:00",
-      "duration_class": "day_swing",
-      "condition_label": "OB+BOS+LIQ+DISP",
-      "confirmed_at": "2026-10-21T01:50:34.523233+00:00",
-      "notified": false
-    },
-    "bias": "bearish",
-    "structure_cache": {
-      "bos": null,
-      "zones": [],
-      "liquidity_ok": true,
-      "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 12.409782359951345,
+      "displacement_hit": true,
+      "atr": 13.207769888738644,
       "structure_seq": "an expanding range (Higher Highs, Lower Lows)",
       "liquidity_zone": 4106.99895,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-22T02:45:19.253069+00:00"
+      "fetched_at": "2026-10-22T03:35:21.392958+00:00"
     },
     "order_blocks": [
       {
@@ -88,24 +103,24 @@
         "is_choch": false
       },
       {
-        "top": 4155.90064,
-        "bot": 4121.67175,
+        "top": 4137.07532,
+        "bot": 4129.33064,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4125.92318,
-        "bot": 4119.97363,
+        "top": 4140.44386,
+        "bot": 4126.77451,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4136.50465,
-        "bot": 4117.13986,
+        "top": 4140.95822,
+        "bot": 4126.7559,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
