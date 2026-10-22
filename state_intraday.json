@@ -32,20 +32,16 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        4080.46681,
-        4093.66301,
-        137
-      ],
+      "bos": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 9.03148347973226,
-      "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
+      "displacement_hit": false,
+      "atr": 9.213670415870135,
+      "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4079.6497,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-22T12:15:24.602982+00:00"
+      "fetched_at": "2026-10-22T12:30:24.914737+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
