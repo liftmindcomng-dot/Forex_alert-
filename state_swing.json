@@ -49,7 +49,7 @@
       "bos": [
         4020.46641,
         4101.89097,
-        144
+        143
       ],
       "zones": [
         {
@@ -71,11 +71,11 @@
       "liquidity_ok": false,
       "sr_ok": true,
       "displacement_hit": true,
-      "atr": 14.346020564585306,
+      "atr": 16.581338076602925,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4106.99895,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-23T01:35:19.482354+00:00"
+      "fetched_at": "2026-10-23T02:25:19.842632+00:00"
     },
     "order_blocks": [
       {
