@@ -237,6 +237,25 @@ def price_decimals(pair):
     return 3 if "JPY" in pair else (2 if "XAU" in pair else 5)
 
 
+def session_label():
+    """Human-readable session window, or None if the configured windows
+    cover all 24 hours (in which case no session filter is applied)."""
+    covered = set()
+    windows = [(SESSION_START_UTC, SESSION_END_UTC)]
+    if SESSION2_ENABLED:
+        windows.append((SESSION2_START_UTC, SESSION2_END_UTC))
+    for start, end in windows:
+        if start == end:
+            continue
+        h = start
+        while h != end:
+            covered.add(h % 24)
+            h = (h + 1) % 24
+    if len(covered) == 24:
+        return None
+    return f"{SESSION_START_UTC:02d}:00–{SESSION_END_UTC:02d}:00 UTC"
+
+
 # ---------------- data ----------------
 
 def fetch_series(pair, interval, outputsize=150):
@@ -1626,9 +1645,12 @@ def process_pair(pair, state):
     decimals = price_decimals(pair)
     label_text = _esc(f"[{STRATEGY_LABEL}] ") if STRATEGY_LABEL else ""
     emoji = "🟢" if signal == "BUY" else "🔴"
+
+    session = session_label()
+    session_part = f" ({session} session)" if session else ""
     mode_desc = {
         "retest": "breakout + retest",
-        "structure": f"{confirmation.get('zone_type', 'order_block').replace('_', ' ')} + engulfing/rejection/FVG (session-filtered)",
+        "structure": f"{confirmation.get('zone_type', 'order_block').replace('_', ' ')} + engulfing/rejection/FVG{session_part}",
         "retest_or_pullback": f"retest+pullback mode ({confirmation.get('trigger')} fired)",
         "pullback": "deep pullback (50-79% retrace)" if SWING_ENTRY_MODE else "pullback",
     }.get(ENTRY_MODE, ENTRY_MODE)
@@ -1645,8 +1667,9 @@ def process_pair(pair, state):
     )
     msg = (
         f"{emoji} <b>{label_text}{signal} — {_esc(pair)}</b>\n"
-        f"Bias: 4H {_esc(bias)} | Structure: {_esc(TF_STRUCTURE)} BOS <code>{setup['bos_level']:.{decimals}f}</code> | "
-        f"Trigger: 5M {_esc(mode_desc)}\n"
+        f"Bias: {_esc(TF_TREND.upper())} {_esc(bias)} | "
+        f"Structure: {_esc(TF_STRUCTURE.upper())} BOS <code>{setup['bos_level']:.{decimals}f}</code>\n"
+        f"Trigger: {_esc(TF_ENTRY)} {_esc(mode_desc)}\n"
         f"{setup_line}"
         f"Entry: <code>{entry:.{decimals}f}</code>\n"
         f"SL: <code>{sl:.{decimals}f}</code>  (R = {r:.{decimals}f})\n"
