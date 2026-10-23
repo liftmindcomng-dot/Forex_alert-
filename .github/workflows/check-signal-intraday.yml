@@ -15,6 +15,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +24,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install metaapi-cloud-sdk matplotlib requests
+        run: pip install metaapi-cloud-sdk matplotlib mplfinance pandas requests
 
       - name: Run intraday signal check
         env:
@@ -42,7 +43,7 @@ jobs:
           SL_BUFFER_ATR_MULT: "0.15"
           ENTRY_MODE: "retest_or_pullback"  # breakout+retest OR pullback — either confirms
           RETEST_TOLERANCE_ATR_MULT: "0.25"
-          SWING_ENTRY_MODE: "true"          # pullback fallback now requires 50-79% retracement before confirming
+          SWING_ENTRY_MODE: "true"          # pullback path requires a 50-79% retracement
           TP_MULTIPLES: "1,2,3"
           DAY_MAX_HOLD_HOURS: "24"
           DAY_SWING_MAX_HOLD_HOURS: "72"
@@ -55,11 +56,17 @@ jobs:
           BROKER_SYMBOL_SUFFIX: "m"
         run: python forex_alert.py
 
+      # Runs even if the signal step failed, so state from pairs that
+      # succeeded is still saved and alerts aren't repeated.
       - name: Commit updated state
+        if: always()
         run: |
           git config user.name "forex-alert-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add state_intraday.json
+
+          if [ -f state_intraday.json ]; then
+            git add state_intraday.json
+          fi
 
           if git diff --quiet --cached; then
             echo "No changes to commit"
@@ -69,7 +76,13 @@ jobs:
           git commit -m "Update intraday signal state [skip ci]"
 
           for i in 1 2 3 4 5; do
-            git pull --rebase && git push && break
+            if git pull --rebase && git push; then
+              echo "State pushed."
+              exit 0
+            fi
             echo "Push failed, retrying ($i)..."
             sleep $((RANDOM % 5 + 1))
           done
+
+          echo "::error::Could not push state_intraday.json after 5 attempts"
+          exit 1
