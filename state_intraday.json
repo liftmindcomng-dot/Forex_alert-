@@ -19,41 +19,45 @@
       "fetched_at": "2026-10-23T18:15:30.469850+00:00"
     },
     "setup": {
-      "bos_level": 4021.85473,
-      "pullback_zone": 4033.16759,
-      "bos_time": "2026-10-23 12:45:00",
+      "bos_level": 3993.92923,
+      "pullback_zone": 4002.40144,
+      "bos_time": "2026-10-23 19:00:00",
       "confirmed": true,
       "is_choch": false,
-      "displacement_hit": true,
+      "displacement_hit": false,
       "delivery": "chart",
-      "last_entry_bar_time": "2026-10-23 14:10:00",
-      "duration_class": "day_swing",
-      "condition_label": "BOS+DISP+RETEST",
-      "confirmed_at": "2026-10-23T14:16:05.361834+00:00",
+      "last_entry_bar_time": "2026-10-23 20:40:00",
+      "duration_class": "day",
+      "condition_label": "BOS+PULLBACK",
+      "confirmed_at": "2026-10-23T20:46:23.091587+00:00",
       "notified": false
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
+      "bos": [
+        3993.92923,
+        4002.40144,
+        143
+      ],
+      "bos_time": "2026-10-23 19:00:00",
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 5.861847325258442,
+      "atr": 5.791958549880858,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 3993.4727350000003,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-23T20:30:31.586385+00:00"
+      "fetched_at": "2026-10-23T20:45:34.051147+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
-      "bos_level": 4021.85473
+      "bos_level": 3993.92923
     },
     "mitigation_blocks": []
   },
   "_api_usage": {
     "date": "2026-10-23",
-    "count": 52
+    "count": 54
   }
 }
