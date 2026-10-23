@@ -14,7 +14,7 @@ What it does each run:
      displacement, order blocks.
   3. Market phase: Continuation / Reversal / Pullback / Trend Leg /
      Invalidation Risk / Potential Reversal / Range / Breakout / Confirmed
-     Breakout, with a confirmation status (displacement + retest).
+     Breakout, with a confirmed flag on every phase.
   4. HTF bias and whether the current read is aligned with it or counter-trend.
   5. Fair value gaps, premium/discount (50% line), key levels (previous day
      high/low, Asia range, equal highs/lows) and liquidity sweeps.
@@ -24,9 +24,10 @@ What it does each run:
   7. Projection: liquidity re-sweep zone + two "price range" targets.
   8. Skips near-identical repeat posts (state file), with a heartbeat post.
   9. Position guidance from open_trade.json (open trade or last stop-out):
-     Setup at level / Re-entry / Wait / Don't enter, or Hold / Move to
-     breakeven / Exit / Stop reached / Check trade file. Informational only.
-     You update open_trade.json by hand after each manual trade action.
+     Setup at level / Re-entry / Wait / Don't enter, or Hold / Caution /
+     Move to breakeven / Exit / Stop reached / Check trade file.
+     Informational only. You update open_trade.json by hand after each
+     manual trade action.
 
 Chart style: TradingView-like SMC layout drawn with plain matplotlib
 (mplfinance is no longer needed): cyan gradient background, structure box,
@@ -131,6 +132,11 @@ PHASE_COLORS = {
     "Breakout": "#00838f",
     "Confirmed Breakout": "#00695c",
 }
+
+# Phases where "CONFIRMED" in the header means a trade read has been confirmed.
+# Trend Leg and Range are excluded: a confirmed trend leg is only continuation,
+# not a setup, so it should not look like a signal.
+CONFIRMABLE_PHASES = {"Pullback", "Continuation", "Reversal", "Invalidation Risk", "Breakout"}
 
 
 # ================== HELPERS ==================
@@ -799,7 +805,10 @@ def volume_profile(plot_df, bins=PROFILE_BINS):
 # ================== PHASE CLASSIFICATION ==================
 def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
                    displacement_hit, atr_val, levels, break_pos=None):
-    """Returns phase, confirmation text, retracement depth and sweep info."""
+    """Returns phase, confirmed flag, confirmation text, retracement depth,
+    sweep info. Invalidation Risk has an early-warning state (past 61.8% of
+    the last leg, not yet through its start) and a confirmed state (closed
+    through the start of the leg)."""
     close = df["Close"].iloc[-1]
     a = atr_val or 0.0
     tol = a * RETEST_TOL_ATR_MULT
@@ -808,7 +817,6 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
 
     retest_held = False
     if break_kind and break_level is not None and break_pos is not None:
-        # bars after the break candle (excluding the latest bar) that came back to the level
         recent = df.iloc[max(break_pos + 1, len(df) - 1 - RETEST_WINDOW):-1]
         if len(recent):
             if bias == "Bullish":
@@ -819,11 +827,12 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
                 retest_held = bool(touched.any() and close < break_level)
 
     # Depth is measured against the most recent impulse (start -> end of the
-    # trend move), not against the latest high/low, which bound the pullback.
+    # trend move), not against the latest high/low.
     depth = None
     depth_label = None
     pull_dist = 0.0
     leg_pts = impulse_leg(swings_high, swings_low, bias)
+    leg_start = leg_pts[0] if leg_pts else None
     if leg_pts:
         start, end = leg_pts
         leg = abs(end - start)
@@ -837,11 +846,22 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
             else:
                 depth_label = "deep"
 
+    # Swing structure agreement, used to confirm a Trend Leg
+    trend_clean = False
+    if len(swings_high) >= 2 and len(swings_low) >= 2:
+        hh = swings_high["Swing_High"].iloc[-1] > swings_high["Swing_High"].iloc[-2]
+        hl = swings_low["Swing_Low"].iloc[-1] > swings_low["Swing_Low"].iloc[-2]
+        lh = swings_high["Swing_High"].iloc[-1] < swings_high["Swing_High"].iloc[-2]
+        ll = swings_low["Swing_Low"].iloc[-1] < swings_low["Swing_Low"].iloc[-2]
+        trend_clean = (bias == "Bullish" and hh and hl) or (bias == "Bearish" and lh and ll)
+
     phase = "Range"
+    confirmed = False
     confirmation = "No confirmed direction"
 
     if break_kind in ("CHoCH", "BOS"):
         phase = "Reversal" if break_kind == "CHoCH" else "Continuation"
+        confirmed = bool(displacement_hit and retest_held)
         if displacement_hit and retest_held:
             confirmation = "Confirmed — displacement + retest held"
         elif displacement_hit:
@@ -852,15 +872,30 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
             confirmation = "Unconfirmed — no displacement, no retest yet"
 
     elif bias in ("Bullish", "Bearish"):
-        if depth is not None and depth > 1.0:
+        past_healthy = depth is not None and depth > 0.618
+        if past_healthy and leg_start is not None:
             phase = "Invalidation Risk"
-            confirmation = "Pullback deeper than the whole last leg — trend may be failing"
+            broke_leg = (bias == "Bullish" and close < leg_start) or \
+                        (bias == "Bearish" and close > leg_start)
+            confirmed = bool(broke_leg)
+            if broke_leg:
+                confirmation = "Confirmed — price closed through the start of the last leg"
+            else:
+                confirmation = (f"Early warning — pullback past 61.8% of last leg, "
+                                f"not yet through {leg_start:,.2f}")
         elif depth is not None and a and pull_dist >= PULLBACK_ATR_MULT * a:
             phase = "Pullback"
-            confirmation = f"Pullback in progress ({depth_label}, {depth * 100:.0f}% of last leg) — wait for it to hold"
+            confirmed = depth_label == "healthy"
+            if confirmed:
+                confirmation = f"Confirmed — healthy pullback ({depth * 100:.0f}% of last leg)"
+            else:
+                confirmation = f"Pullback in progress ({depth_label}, {depth * 100:.0f}% of last leg) — wait for it to hold"
         else:
             phase = "Trend Leg"
-            confirmation = "Trend intact — waiting for the next structure break"
+            confirmed = trend_clean
+            confirmation = ("Confirmed — swing structure agrees with the trend"
+                            if trend_clean else
+                            "Trend intact — waiting for the next structure break")
 
     else:  # Neutral
         if sweep:
@@ -875,6 +910,7 @@ def classify_phase(df, bias, break_kind, break_level, swings_high, swings_low,
 
     return {
         "phase": phase,
+        "confirmed": confirmed,
         "confirmation": confirmation,
         "depth": depth,
         "depth_label": depth_label,
@@ -899,8 +935,9 @@ def invalidation_level(bias, phase, swings_high, swings_low, sweep):
 def build_trade_idea(a, price):
     """Watch level only, no order is placed. Level = nearest aligned order
     block / FVG on the pullback side of price; stop = beyond the invalidation
-    level plus an ATR buffer; targets at 1R / 2R / 3R. Marked conditional
-    unless the structure is confirmed. Returns None if there's no sensible
+    level plus an ATR buffer; targets at 1R / 2R / 3R. Conditional unless the
+    read is confirmed. A Trend Leg is always conditional, because a trend leg
+    with no pullback is not a setup. Returns None if there's no sensible
     setup. Range breakouts are handled by build_breakout_trade()."""
     phase, bias = a["phase"], a["bias"]
     atr_val, inv = a["atr"], a["invalidation"]
@@ -951,7 +988,7 @@ def build_trade_idea(a, price):
 
     targets = [entry + direction * risk * r for r in (1, 2, 3)]
 
-    conditional = not a["confirmation"].startswith("Confirmed")
+    conditional = (not a["confirmed"]) or phase == "Trend Leg"
     return {
         "direction": "LONG" if direction == 1 else "SHORT",
         "zone_name": zone_name,
@@ -1082,6 +1119,7 @@ def full_analysis(df, htf):
     if rb and ph["phase"] == "Range":
         ph["phase"] = "Confirmed Breakout" if rb["confirmed"] else "Breakout"
         ph["confirmation"] = rb["status"]
+        ph["confirmed"] = bool(rb["confirmed"])
 
     zones = []
     if bias in ("Bullish", "Bearish"):
@@ -1490,7 +1528,7 @@ def _draw_chart(df, a, filename):
     htf_txt = f" · {htf['interval']} {htf['bias']}" if htf else ""
     fig.text(0.03, 0.955, f"XAUUSD · {INTERVAL.upper()} · {bias}{htf_txt} · {a['session']}",
              fontsize=13, fontweight="bold", color="#263238", va="center")
-    fig.text(0.03, 0.918, f"PHASE: {phase.upper()}", fontsize=10, fontweight="bold", color="white",
+    fig.text(0.03, 0.918, f"PHASE: {phase_label(a)}", fontsize=10, fontweight="bold", color="white",
              va="center", ha="left",
              bbox=dict(boxstyle="round,pad=0.4", fc=PHASE_COLORS.get(phase, "#616161"), ec="none"))
 
@@ -1584,12 +1622,9 @@ def load_trade_state():
 def position_guidance(a, price, open_trade, last_closed):
     """One suggested action, informational only. Orders are placed by hand.
     With a trade-file warning:  Check trade file (no entry or hold advice).
-    With an open trade:         Hold / Move to breakeven / Exit / Stop reached.
+    With an open trade:         Hold / Caution / Move to breakeven / Exit / Stop reached.
     Without one:                Setup at level / Re-entry / Wait / Don't enter.
-    Setup at level means a confirmed setup with price inside the zone. The bot
-    does not know whether you placed an order; it only reads open_trade.json.
-    Re-entry means the last recorded trade in the same direction was stopped
-    out and the setup is valid again. Returns {"action", "detail", "key"}."""
+    Returns {"action", "detail", "key"}."""
     bias, phase = a["bias"], a["phase"]
     t = a["trade"]
 
@@ -1623,10 +1658,16 @@ def position_guidance(a, price, open_trade, last_closed):
             return {"action": "Exit",
                     "detail": "A confirmed break has turned structure against the trade. Consider closing it.",
                     "key": "exit"}
-        if phase == "Invalidation Risk" and not structure_against and bias in ("Bullish", "Bearish"):
-            return {"action": "Exit",
-                    "detail": "The pullback has taken more than the whole last leg. Consider reducing or closing.",
-                    "key": "exit"}
+
+        if phase == "Invalidation Risk" and not structure_against:
+            if a["confirmed"]:
+                return {"action": "Exit",
+                        "detail": "Price has closed through the start of the last leg, so the trade's read is broken. Consider closing it.",
+                        "key": "exit"}
+            return {"action": "Caution",
+                    "detail": a["confirmation"] + ". Consider tightening the stop or preparing to exit.",
+                    "key": "caution"}
+
         if progress >= 1 and not be_moved:
             return {"action": "Move to breakeven",
                     "detail": f"Price is at {progress:.1f}R. Move the stop to entry {entry:,.2f}, then set be_moved to true.",
@@ -1684,13 +1725,23 @@ def outlook_line(phase, bias):
     return lines.get(phase, "Wait for reaction at the zone.")
 
 
+def phase_label(a):
+    """Phase name for headers. Adds CONFIRMED only for setup phases."""
+    phase = a["phase"]
+    if phase.startswith("Confirmed"):
+        return phase.upper()
+    if phase in CONFIRMABLE_PHASES and a.get("confirmed"):
+        return f"CONFIRMED {phase.upper()}"
+    return phase.upper()
+
+
 def create_caption(a, price):
     """Short caption for the photo (Telegram caps captions at 1024 chars;
     this stays far below that because the content is fixed-size)."""
     htf = a["htf"]
     htf_part = f" | {htf['interval']}: {htf['bias']}" if htf else ""
     return (
-        f"📌 <b>XAUUSD {INTERVAL.upper()} — {a['phase']}</b>\n"
+        f"📌 <b>XAUUSD {INTERVAL.upper()} — {phase_label(a)}</b>\n"
         f"Price <b>{price:,.2f}</b> | Bias: <b>{a['bias']}</b>{htf_part}\n"
         f"{a['confirmation']}\n"
         f"🧭 Guidance: <b>{a['guidance']['action']}</b>"
@@ -1709,7 +1760,7 @@ def create_message(a, price):
         f"— {PAIR.replace('/', '')} / {INTERVAL.upper()} —\n\n"
         f"XAUUSD is trading around <b>{price:,.2f}</b>.\n"
         f"🕒 Session: <b>{a['session']}</b> — {a['session_note']}\n\n"
-        f"<b>Phase:</b> {phase}\n"
+        f"<b>Phase:</b> {phase_label(a)}\n"
         f"<b>Status:</b> {a['confirmation']}\n"
         f"<b>HTF:</b> {a['align_text']}\n"
     )
@@ -1841,6 +1892,7 @@ def make_signature(a):
     rf_part = f"rf={rf['dir']}" if rf else "rf=none"
     return "|".join([
         a["phase"], a["bias"], str(a["break_kind"]), htf_bias,
+        f"conf={int(a['confirmed'])}",
         f"zone={int(a['in_zone'])}", f"fvg={int(a['in_fvg'] is not None)}", f"sweep={sweep_name}",
         rb_part, rf_part, f"guide={a['guidance']['key']}",
     ])
