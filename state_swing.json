@@ -18,20 +18,72 @@
       "bias": "bearish",
       "fetched_at": "2026-10-26T13:25:25.782122+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4003.26123,
+      "pullback_zone": 4019.33421,
+      "bos_time": "2026-10-26 07:00:00",
+      "confirmed": true,
+      "is_choch": false,
+      "displacement_hit": true,
+      "zones": [
+        {
+          "high": 4016.06426,
+          "low": 4007.53416,
+          "type": "order_block"
+        },
+        {
+          "high": 4003.69021,
+          "low": 3990.50063,
+          "type": "order_block"
+        },
+        {
+          "high": 3994.88655,
+          "low": 3992.17534,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
+      "sr_ok": true,
+      "delivery": "failed",
+      "last_entry_bar_time": "2026-10-26 13:45:00",
+      "duration_class": "day_swing",
+      "condition_label": "OB+BOS+FVG+DISP",
+      "confirmed_at": "2026-10-26T13:57:21.651519+00:00",
+      "notified": false
+    },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
-      "zones": [],
-      "liquidity_ok": true,
+      "bos": [
+        4003.26123,
+        4019.33421,
+        143
+      ],
+      "bos_time": "2026-10-26 07:00:00",
+      "zones": [
+        {
+          "high": 4016.06426,
+          "low": 4007.53416,
+          "type": "order_block"
+        },
+        {
+          "high": 4003.69021,
+          "low": 3990.50063,
+          "type": "order_block"
+        },
+        {
+          "high": 3994.88655,
+          "low": 3992.17534,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 8.306265396418308,
+      "displacement_hit": true,
+      "atr": 9.435068748439267,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 3976.70576,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-26T13:00:36.614745+00:00"
+      "fetched_at": "2026-10-26T13:55:22.607695+00:00"
     },
     "order_blocks": [
       {
@@ -59,27 +111,27 @@
         "is_choch": false
       },
       {
-        "top": 4032.25806,
-        "bot": 4017.03222,
+        "top": 4016.06426,
+        "bot": 4007.53416,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4032.25806,
-        "bot": 4024.43045,
+        "top": 4003.69021,
+        "bot": 3990.50063,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 4025.20991,
-        "bot": 4023.33535,
+        "top": 3994.88655,
+        "bot": 3992.17534,
         "type": "order_block",
         "direction": "bearish",
-        "active": true,
+        "active": false,
         "is_choch": false
       }
     ],
@@ -113,14 +165,6 @@
         "is_choch": false
       },
       {
-        "top": 4141.62923,
-        "bot": 4140.5991,
-        "type": "breaker_block",
-        "direction": "bullish",
-        "active": false,
-        "is_choch": false
-      },
-      {
         "top": 4149.57325,
         "bot": 4143.53195,
         "type": "breaker_block",
@@ -134,6 +178,14 @@
         "type": "breaker_block",
         "direction": "bullish",
         "active": false,
+        "is_choch": false
+      },
+      {
+        "top": 3994.88655,
+        "bot": 3992.17534,
+        "type": "breaker_block",
+        "direction": "bullish",
+        "active": true,
         "is_choch": false
       }
     ],
@@ -163,14 +215,6 @@
         "is_choch": false
       },
       {
-        "top": 4141.62923,
-        "bot": 4140.5991,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
         "top": 4149.57325,
         "bot": 4143.53195,
         "type": "mitigation_block",
@@ -185,11 +229,19 @@
         "direction": "bearish",
         "active": true,
         "is_choch": false
+      },
+      {
+        "top": 3994.88655,
+        "bot": 3992.17534,
+        "type": "mitigation_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
       }
     ]
   },
   "_api_usage": {
     "date": "2026-10-26",
-    "count": 9
+    "count": 11
   }
 }
