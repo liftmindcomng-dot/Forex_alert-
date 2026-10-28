@@ -34,21 +34,17 @@
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": [
-        4047.76361,
-        4036.48987,
-        142
-      ],
-      "bos_time": "2026-10-28 16:45:00",
+      "bos": null,
+      "bos_time": null,
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 7.643463148132382,
-      "structure_seq": "Higher Highs, Higher Lows",
+      "displacement_hit": false,
+      "atr": 9.706090402100651,
+      "structure_seq": "an expanding range (Higher Highs, Lower Lows)",
       "liquidity_zone": 4047.476565,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-28T18:45:31.296808+00:00"
+      "fetched_at": "2026-10-28T19:00:33.756835+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
@@ -58,6 +54,6 @@
   },
   "_api_usage": {
     "date": "2026-10-28",
-    "count": 58
+    "count": 59
   }
 }
