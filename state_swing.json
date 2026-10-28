@@ -15,11 +15,11 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": null,
-      "fetched_at": "2026-10-28T08:00:32.519062+00:00"
+      "bias": "bullish",
+      "fetched_at": "2026-10-28T11:55:23.218701+00:00"
     },
     "setup": null,
-    "bias": "bearish",
+    "bias": "bullish",
     "structure_cache": {
       "bos": null,
       "bos_time": null,
@@ -27,11 +27,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 10.52400443091287,
-      "structure_seq": "an expanding range (Higher Highs, Lower Lows)",
-      "liquidity_zone": 3988.1949999999997,
-      "bias_at_fetch": "bearish",
-      "fetched_at": "2026-10-26T21:00:34.465716+00:00"
+      "atr": 9.842400156793344,
+      "structure_seq": "Lower Highs, Lower Lows",
+      "liquidity_zone": 4019.65993,
+      "bias_at_fetch": "bullish",
+      "fetched_at": "2026-10-28T11:55:23.218701+00:00"
     },
     "order_blocks": [
       {
@@ -137,59 +137,13 @@
         "is_choch": false
       }
     ],
-    "mitigation_blocks": [
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "mitigation_block",
-        "direction": "bullish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "mitigation_block",
-        "direction": "bullish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "mitigation_block",
-        "direction": "bullish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4149.57325,
-        "bot": 4143.53195,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4146.10888,
-        "bot": 4137.00422,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 3994.88655,
-        "bot": 3992.17534,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      }
-    ]
+    "mitigation_blocks": [],
+    "pending_choch": {
+      "at": "2026-10-28T11:55:23.218701+00:00"
+    }
   },
   "_api_usage": {
     "date": "2026-10-28",
-    "count": 3
+    "count": 5
   }
 }
