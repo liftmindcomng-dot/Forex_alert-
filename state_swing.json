@@ -22,7 +22,7 @@
       "bos_level": 4059.91592,
       "pullback_zone": 4043.18117,
       "bos_time": "2026-10-28 12:00:00",
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": true,
       "displacement_hit": true,
       "zones": [
@@ -43,7 +43,13 @@
         }
       ],
       "liquidity_ok": true,
-      "sr_ok": true
+      "sr_ok": true,
+      "delivery": "chart",
+      "last_entry_bar_time": "2026-10-29 02:45:00",
+      "duration_class": "swing",
+      "condition_label": "OB+CHoCH+LIQ+DISP",
+      "confirmed_at": "2026-10-29T03:00:50.389372+00:00",
+      "notified": false
     },
     "bias": "bullish",
     "structure_cache": {
@@ -184,6 +190,6 @@
   },
   "_api_usage": {
     "date": "2026-10-29",
-    "count": 40
+    "count": 41
   }
 }
