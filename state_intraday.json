@@ -16,7 +16,7 @@
   "XAU/USD": {
     "trend_cache": {
       "bias": "bullish",
-      "fetched_at": "2026-10-29T11:25:22.886080+00:00"
+      "fetched_at": "2026-10-29T15:15:28.754554+00:00"
     },
     "setup": {
       "bos_level": 4033.72192,
@@ -40,11 +40,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 8.690903961262919,
+      "atr": 8.448042312098263,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 4037.0617325000003,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-29T15:00:35.615059+00:00"
+      "fetched_at": "2026-10-29T15:15:28.754554+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
@@ -54,6 +54,6 @@
   },
   "_api_usage": {
     "date": "2026-10-29",
-    "count": 138
+    "count": 140
   }
 }
