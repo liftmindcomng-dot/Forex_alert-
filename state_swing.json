@@ -59,11 +59,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 16.115171863716647,
+      "atr": 15.220317702128607,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
-      "liquidity_zone": 4067.521815,
+      "liquidity_zone": 4069.838455,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-29T03:35:31.196513+00:00"
+      "fetched_at": "2026-10-29T04:30:29.371726+00:00"
     },
     "order_blocks": [
       {
@@ -190,6 +190,6 @@
   },
   "_api_usage": {
     "date": "2026-10-29",
-    "count": 43
+    "count": 44
   }
 }
