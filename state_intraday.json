@@ -22,9 +22,15 @@
       "bos_level": 4002.6049,
       "pullback_zone": 3996.48309,
       "bos_time": "2026-10-30 03:30:00",
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
-      "displacement_hit": false
+      "displacement_hit": false,
+      "delivery": "chart",
+      "last_entry_bar_time": "2026-10-30 05:35:00",
+      "duration_class": "day",
+      "condition_label": "BOS+RETEST",
+      "confirmed_at": "2026-10-30T05:40:37.059786+00:00",
+      "notified": false
     },
     "bias": "bullish",
     "structure_cache": {
@@ -52,6 +58,6 @@
   },
   "_api_usage": {
     "date": "2026-10-30",
-    "count": 26
+    "count": 27
   }
 }
