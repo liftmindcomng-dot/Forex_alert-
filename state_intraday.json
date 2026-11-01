@@ -15,24 +15,11 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": "bullish",
-      "fetched_at": "2026-10-30T18:35:23.453001+00:00"
+      "bias": "bearish",
+      "fetched_at": "2026-11-01T22:00:33.313690+00:00"
     },
-    "setup": {
-      "bos_level": 3994.53526,
-      "pullback_zone": 3988.10127,
-      "bos_time": "2026-10-30 06:30:00",
-      "confirmed": true,
-      "is_choch": false,
-      "displacement_hit": true,
-      "delivery": "chart",
-      "last_entry_bar_time": "2026-10-30 08:55:00",
-      "duration_class": "day_swing",
-      "condition_label": "BOS+DISP+RETEST",
-      "confirmed_at": "2026-10-30T09:00:52.817139+00:00",
-      "notified": false
-    },
-    "bias": "bullish",
+    "setup": null,
+    "bias": "bearish",
     "structure_cache": {
       "bos": null,
       "bos_time": null,
@@ -40,20 +27,23 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 6.231023946080262,
+      "atr": 0.2571706771628252,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
-      "liquidity_zone": 4025.9298233333334,
-      "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-30T21:45:33.684414+00:00"
+      "liquidity_zone": 3875.29938516129,
+      "bias_at_fetch": "bearish",
+      "fetched_at": "2026-11-01T22:00:33.313690+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
       "bos_level": 4002.6049
     },
-    "mitigation_blocks": []
+    "mitigation_blocks": [],
+    "pending_choch": {
+      "at": "2026-11-01T22:00:33.313690+00:00"
+    }
   },
   "_api_usage": {
-    "date": "2026-10-30",
-    "count": 97
+    "date": "2026-11-01",
+    "count": 2
   }
 }
