@@ -15,43 +15,11 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": "bullish",
-      "fetched_at": "2026-10-30T18:10:30.603093+00:00"
+      "bias": "bearish",
+      "fetched_at": "2026-11-01T22:00:36.516443+00:00"
     },
-    "setup": {
-      "bos_level": 4059.91592,
-      "pullback_zone": 4043.18117,
-      "bos_time": "2026-10-28 12:00:00",
-      "confirmed": true,
-      "is_choch": true,
-      "displacement_hit": true,
-      "zones": [
-        {
-          "high": 4034.37286,
-          "low": 4028.34572,
-          "type": "order_block"
-        },
-        {
-          "high": 4037.64914,
-          "low": 4030.14549,
-          "type": "order_block"
-        },
-        {
-          "high": 4043.2479,
-          "low": 4036.62964,
-          "type": "order_block"
-        }
-      ],
-      "liquidity_ok": true,
-      "sr_ok": true,
-      "delivery": "chart",
-      "last_entry_bar_time": "2026-10-29 02:45:00",
-      "duration_class": "swing",
-      "condition_label": "OB+CHoCH+LIQ+DISP",
-      "confirmed_at": "2026-10-29T03:00:50.389372+00:00",
-      "notified": false
-    },
-    "bias": "bullish",
+    "setup": null,
+    "bias": "bearish",
     "structure_cache": {
       "bos": null,
       "bos_time": null,
@@ -59,11 +27,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 15.964266714698734,
-      "structure_seq": "Lower Highs, Lower Lows",
-      "liquidity_zone": 4067.521815,
-      "bias_at_fetch": "bullish",
-      "fetched_at": "2026-10-30T21:25:30.037906+00:00"
+      "atr": 0.7128803009220785,
+      "structure_seq": "Higher Highs, Higher Lows",
+      "liquidity_zone": 3875.2904,
+      "bias_at_fetch": "bearish",
+      "fetched_at": "2026-11-01T22:00:36.516443+00:00"
     },
     "order_blocks": [
       {
@@ -169,27 +137,13 @@
         "is_choch": false
       }
     ],
-    "mitigation_blocks": [
-      {
-        "top": 4016.06426,
-        "bot": 4007.53416,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4003.69021,
-        "bot": 3990.50063,
-        "type": "mitigation_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      }
-    ]
+    "mitigation_blocks": [],
+    "pending_choch": {
+      "at": "2026-11-01T22:00:36.516443+00:00"
+    }
   },
   "_api_usage": {
-    "date": "2026-10-30",
-    "count": 30
+    "date": "2026-11-01",
+    "count": 2
   }
 }
