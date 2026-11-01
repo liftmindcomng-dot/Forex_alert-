@@ -31,21 +31,17 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": [
-        3875.2947,
-        3875.53592,
-        114
-      ],
-      "bos_time": "2026-10-31 11:00:00",
+      "bos": null,
+      "bos_time": null,
       "zones": [],
-      "liquidity_ok": false,
+      "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": true,
-      "atr": 0.84427124387843,
+      "displacement_hit": false,
+      "atr": 3.369307928481518,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 3875.2904,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-01T22:55:28.103818+00:00"
+      "fetched_at": "2026-11-01T23:45:30.278316+00:00"
     },
     "order_blocks": [
       {
@@ -180,6 +176,6 @@
   },
   "_api_usage": {
     "date": "2026-11-01",
-    "count": 13
+    "count": 15
   }
 }
