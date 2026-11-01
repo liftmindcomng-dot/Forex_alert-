@@ -18,20 +18,34 @@
       "bias": "bearish",
       "fetched_at": "2026-11-01T22:00:36.516443+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 3875.2947,
+      "pullback_zone": 3875.53592,
+      "bos_time": "2026-10-31 11:00:00",
+      "confirmed": false,
+      "is_choch": true,
+      "displacement_hit": true,
+      "zones": [],
+      "liquidity_ok": false,
+      "sr_ok": true
+    },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
+      "bos": [
+        3875.2947,
+        3875.53592,
+        114
+      ],
+      "bos_time": "2026-10-31 11:00:00",
       "zones": [],
-      "liquidity_ok": true,
+      "liquidity_ok": false,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 0.7128803009220785,
+      "displacement_hit": true,
+      "atr": 0.84427124387843,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 3875.2904,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-01T22:00:36.516443+00:00"
+      "fetched_at": "2026-11-01T22:55:28.103818+00:00"
     },
     "order_blocks": [
       {
@@ -63,7 +77,7 @@
         "bot": 4028.34572,
         "type": "order_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": true
       },
       {
@@ -71,7 +85,7 @@
         "bot": 4030.14549,
         "type": "order_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": true
       },
       {
@@ -79,45 +93,21 @@
         "bot": 4036.62964,
         "type": "order_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": true
       }
     ],
     "last_market_update": {
-      "bias": "bullish",
-      "bos_level": 4059.91592
+      "bias": "bearish",
+      "bos_level": 3875.2947
     },
     "breaker_blocks": [
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "breaker_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "breaker_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
-      {
-        "top": 4167.36372,
-        "bot": 4155.93051,
-        "type": "breaker_block",
-        "direction": "bearish",
-        "active": true,
-        "is_choch": false
-      },
       {
         "top": 3994.88655,
         "bot": 3992.17534,
         "type": "breaker_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -125,7 +115,7 @@
         "bot": 4007.53416,
         "type": "breaker_block",
         "direction": "bullish",
-        "active": true,
+        "active": false,
         "is_choch": false
       },
       {
@@ -133,17 +123,63 @@
         "bot": 3990.50063,
         "type": "breaker_block",
         "direction": "bullish",
+        "active": false,
+        "is_choch": false
+      },
+      {
+        "top": 4034.37286,
+        "bot": 4028.34572,
+        "type": "breaker_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4037.64914,
+        "bot": 4030.14549,
+        "type": "breaker_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4043.2479,
+        "bot": 4036.62964,
+        "type": "breaker_block",
+        "direction": "bearish",
         "active": true,
         "is_choch": false
       }
     ],
-    "mitigation_blocks": [],
-    "pending_choch": {
-      "at": "2026-11-01T22:00:36.516443+00:00"
-    }
+    "mitigation_blocks": [
+      {
+        "top": 4034.37286,
+        "bot": 4028.34572,
+        "type": "mitigation_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4037.64914,
+        "bot": 4030.14549,
+        "type": "mitigation_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4043.2479,
+        "bot": 4036.62964,
+        "type": "mitigation_block",
+        "direction": "bullish",
+        "active": true,
+        "is_choch": false
+      }
+    ]
   },
   "_api_usage": {
     "date": "2026-11-01",
-    "count": 2
+    "count": 4
   }
 }
