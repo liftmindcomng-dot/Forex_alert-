@@ -43,11 +43,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 15.637463841619129,
+      "atr": 15.063031333420298,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 3969.59296,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-11-03T18:00:38.679868+00:00"
+      "fetched_at": "2026-11-03T18:55:35.544770+00:00"
     },
     "order_blocks": [
       {
@@ -157,6 +157,6 @@
   },
   "_api_usage": {
     "date": "2026-11-03",
-    "count": 89
+    "count": 91
   }
 }
