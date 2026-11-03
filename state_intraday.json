@@ -15,23 +15,10 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": "bullish",
-      "fetched_at": "2026-11-03T16:40:29.782614+00:00"
+      "bias": null,
+      "fetched_at": "2026-11-03T20:30:37.425104+00:00"
     },
-    "setup": {
-      "bos_level": 3910.61494,
-      "pullback_zone": 3901.06889,
-      "bos_time": "2026-11-03 11:00:00",
-      "confirmed": true,
-      "is_choch": true,
-      "displacement_hit": false,
-      "delivery": "chart",
-      "last_entry_bar_time": "2026-11-03 12:45:00",
-      "duration_class": "day_swing",
-      "condition_label": "CHoCH+PULLBACK",
-      "confirmed_at": "2026-11-03T12:50:48.701545+00:00",
-      "notified": false
-    },
+    "setup": null,
     "bias": "bullish",
     "structure_cache": {
       "bos": null,
@@ -54,6 +41,6 @@
   },
   "_api_usage": {
     "date": "2026-11-03",
-    "count": 87
+    "count": 88
   }
 }
