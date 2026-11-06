@@ -22,9 +22,15 @@
       "bos_level": 4068.18274,
       "pullback_zone": 4028.58706,
       "bos_time": "2026-11-06 16:45:00",
-      "confirmed": false,
+      "confirmed": true,
       "is_choch": false,
-      "displacement_hit": false
+      "displacement_hit": false,
+      "delivery": "chart",
+      "last_entry_bar_time": "2026-11-06 18:45:00",
+      "duration_class": "day",
+      "condition_label": "BOS+RETEST",
+      "confirmed_at": "2026-11-06T18:50:42.750921+00:00",
+      "notified": false
     },
     "bias": "bullish",
     "structure_cache": {
@@ -52,6 +58,6 @@
   },
   "_api_usage": {
     "date": "2026-11-06",
-    "count": 90
+    "count": 91
   }
 }
