@@ -19,32 +19,30 @@
       "fetched_at": "2026-11-06T14:30:32.882938+00:00"
     },
     "setup": {
-      "bos_level": 4050.72854,
-      "pullback_zone": 4036.73063,
-      "bos_time": "2026-11-06 06:15:00",
-      "confirmed": true,
+      "bos_level": 4057.28892,
+      "pullback_zone": 4028.58706,
+      "bos_time": "2026-11-06 15:15:00",
+      "confirmed": false,
       "is_choch": false,
-      "displacement_hit": true,
-      "delivery": "chart",
-      "last_entry_bar_time": "2026-11-06 07:55:00",
-      "duration_class": "day_swing",
-      "condition_label": "BOS+DISP+PULLBACK",
-      "confirmed_at": "2026-11-06T08:01:04.825532+00:00",
-      "notified": false
+      "displacement_hit": false
     },
     "bias": "bullish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
+      "bos": [
+        4057.28892,
+        4028.58706,
+        146
+      ],
+      "bos_time": "2026-11-06 15:15:00",
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 10.517439882405714,
+      "atr": 10.495970983826878,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 4080.10663,
       "bias_at_fetch": "bullish",
-      "fetched_at": "2026-11-06T16:00:34.193156+00:00"
+      "fetched_at": "2026-11-06T16:15:26.451151+00:00"
     },
     "last_market_update": {
       "bias": "bullish",
@@ -54,6 +52,6 @@
   },
   "_api_usage": {
     "date": "2026-11-06",
-    "count": 70
+    "count": 72
   }
 }
