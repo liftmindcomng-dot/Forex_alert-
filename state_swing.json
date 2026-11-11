@@ -15,41 +15,61 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": null,
-      "fetched_at": "2026-11-11T12:00:33.033173+00:00"
+      "bias": "bearish",
+      "fetched_at": "2026-11-11T15:55:28.170168+00:00"
     },
-    "setup": null,
+    "setup": {
+      "bos_level": 4024.24327,
+      "pullback_zone": 4036.07252,
+      "bos_time": "2026-11-11 01:00:00",
+      "confirmed": false,
+      "is_choch": false,
+      "displacement_hit": true,
+      "zones": [
+        {
+          "high": 4053.6706,
+          "low": 4033.92568,
+          "type": "order_block"
+        },
+        {
+          "high": 4080.13383,
+          "low": 4072.51827,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
+      "sr_ok": true
+    },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
-      "zones": [],
-      "liquidity_ok": true,
+      "bos": [
+        4024.24327,
+        4036.07252,
+        135
+      ],
+      "bos_time": "2026-11-11 01:00:00",
+      "zones": [
+        {
+          "high": 4053.6706,
+          "low": 4033.92568,
+          "type": "order_block"
+        },
+        {
+          "high": 4080.13383,
+          "low": 4072.51827,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 13.023695421349844,
-      "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
-      "liquidity_zone": 4055.169215,
+      "displacement_hit": true,
+      "atr": 13.62637031317476,
+      "structure_seq": "Higher Highs, Higher Lows",
+      "liquidity_zone": 4065.6832799999997,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-10T04:10:30.593883+00:00"
+      "fetched_at": "2026-11-11T15:55:28.170168+00:00"
     },
     "order_blocks": [
-      {
-        "top": 4016.06426,
-        "bot": 4007.53416,
-        "type": "order_block",
-        "direction": "bearish",
-        "active": false,
-        "is_choch": false
-      },
-      {
-        "top": 4003.69021,
-        "bot": 3990.50063,
-        "type": "order_block",
-        "direction": "bearish",
-        "active": false,
-        "is_choch": false
-      },
       {
         "top": 3994.88655,
         "bot": 3992.17534,
@@ -81,11 +101,27 @@
         "direction": "bullish",
         "active": true,
         "is_choch": true
+      },
+      {
+        "top": 4053.6706,
+        "bot": 4033.92568,
+        "type": "order_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
+      },
+      {
+        "top": 4080.13383,
+        "bot": 4072.51827,
+        "type": "order_block",
+        "direction": "bearish",
+        "active": true,
+        "is_choch": false
       }
     ],
     "last_market_update": {
-      "bias": "bullish",
-      "bos_level": 4070.60124
+      "bias": "bearish",
+      "bos_level": 4024.24327
     },
     "breaker_blocks": [
       {
@@ -137,13 +173,10 @@
         "is_choch": false
       }
     ],
-    "mitigation_blocks": [],
-    "pending_choch": {
-      "at": "2026-11-09T09:35:27.381202+00:00"
-    }
+    "mitigation_blocks": []
   },
   "_api_usage": {
     "date": "2026-11-11",
-    "count": 4
+    "count": 7
   }
 }
