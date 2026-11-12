@@ -37,18 +37,18 @@
       "bos": [
         3924.00668,
         3982.13853,
-        132
+        131
       ],
       "bos_time": "2026-11-12 09:00:00",
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": true,
-      "atr": 8.251028238509068,
+      "atr": 9.582499413202088,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 3969.64379,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-12T13:25:23.023324+00:00"
+      "fetched_at": "2026-11-12T13:40:30.485190+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
@@ -58,6 +58,6 @@
   },
   "_api_usage": {
     "date": "2026-11-12",
-    "count": 67
+    "count": 68
   }
 }
