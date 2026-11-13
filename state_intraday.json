@@ -40,11 +40,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 6.539309131190237,
+      "atr": 6.532277245685386,
       "structure_seq": "Higher Highs, Higher Lows",
       "liquidity_zone": 3875.96837,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-13T05:25:37.320416+00:00"
+      "fetched_at": "2026-11-13T05:40:25.366874+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
@@ -54,6 +54,6 @@
   },
   "_api_usage": {
     "date": "2026-11-13",
-    "count": 23
+    "count": 24
   }
 }
