@@ -47,17 +47,37 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
-      "zones": [],
+      "bos": [
+        3695.08185,
+        3758.12695,
+        135
+      ],
+      "bos_time": "2026-11-19 03:00:00",
+      "zones": [
+        {
+          "high": 3758.12695,
+          "low": 3738.70802,
+          "type": "order_block"
+        },
+        {
+          "high": 3755.86854,
+          "low": 3735.66439,
+          "type": "order_block"
+        },
+        {
+          "high": 3744.4769,
+          "low": 3725.0851,
+          "type": "order_block"
+        }
+      ],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 18.186095263838922,
+      "displacement_hit": true,
+      "atr": 18.486222997491783,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 3842.21294,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-19T16:45:39.159251+00:00"
+      "fetched_at": "2026-11-19T17:40:32.728364+00:00"
     },
     "order_blocks": [
       {
@@ -176,6 +196,6 @@
   },
   "_api_usage": {
     "date": "2026-11-19",
-    "count": 33
+    "count": 35
   }
 }
