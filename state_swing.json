@@ -16,7 +16,7 @@
   "XAU/USD": {
     "trend_cache": {
       "bias": "bearish",
-      "fetched_at": "2026-11-20T06:55:24.486863+00:00"
+      "fetched_at": "2026-11-20T10:45:27.576816+00:00"
     },
     "setup": {
       "bos_level": 3695.08185,
@@ -176,6 +176,6 @@
   },
   "_api_usage": {
     "date": "2026-11-20",
-    "count": 142
+    "count": 144
   }
 }
