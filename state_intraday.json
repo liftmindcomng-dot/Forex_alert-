@@ -15,8 +15,8 @@
   },
   "XAU/USD": {
     "trend_cache": {
-      "bias": null,
-      "fetched_at": "2026-11-23T01:50:26.944067+00:00"
+      "bias": "bearish",
+      "fetched_at": "2026-11-23T05:40:28.768238+00:00"
     },
     "setup": null,
     "bias": "bearish",
@@ -27,11 +27,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 14.910008841394799,
-      "structure_seq": "Lower Highs, Lower Lows",
-      "liquidity_zone": 3503.999585,
+      "atr": 9.692744208255245,
+      "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
+      "liquidity_zone": 3534.860293,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-20T21:45:26.024127+00:00"
+      "fetched_at": "2026-11-23T05:40:28.768238+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
@@ -41,6 +41,6 @@
   },
   "_api_usage": {
     "date": "2026-11-23",
-    "count": 1
+    "count": 3
   }
 }
