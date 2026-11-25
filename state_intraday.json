@@ -19,41 +19,39 @@
       "fetched_at": "2026-11-25T08:10:23.443805+00:00"
     },
     "setup": {
-      "bos_level": 3542.2432,
-      "pullback_zone": 3560.2656,
-      "bos_time": "2026-11-25 04:00:00",
-      "confirmed": true,
+      "bos_level": 3523.48402,
+      "pullback_zone": 3539.59733,
+      "bos_time": "2026-11-25 09:30:00",
+      "confirmed": false,
       "is_choch": false,
-      "displacement_hit": false,
-      "delivery": "chart",
-      "last_entry_bar_time": "2026-11-25 05:40:00",
-      "duration_class": "day",
-      "condition_label": "BOS+RETEST",
-      "confirmed_at": "2026-11-25T05:45:39.163729+00:00",
-      "notified": false
+      "displacement_hit": true
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
+      "bos": [
+        3523.48402,
+        3539.59733,
+        141
+      ],
+      "bos_time": "2026-11-25 09:30:00",
       "zones": [],
       "liquidity_ok": true,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 7.839759666646624,
+      "displacement_hit": true,
+      "atr": 8.40970132518722,
       "structure_seq": "a contracting range (Lower Highs, Higher Lows)",
       "liquidity_zone": 3516.2624100000003,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-25T11:25:23.521787+00:00"
+      "fetched_at": "2026-11-25T11:40:26.823045+00:00"
     },
     "last_market_update": {
       "bias": "bearish",
-      "bos_level": 3547.15932
+      "bos_level": 3523.48402
     },
     "mitigation_blocks": []
   },
   "_api_usage": {
     "date": "2026-11-25",
-    "count": 54
+    "count": 56
   }
 }
