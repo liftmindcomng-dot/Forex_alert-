@@ -19,26 +19,26 @@
       "fetched_at": "2026-11-25T12:10:23.237422+00:00"
     },
     "setup": {
-      "bos_level": 3534.11231,
-      "pullback_zone": 3568.62465,
-      "bos_time": "2026-11-25 01:00:00",
+      "bos_level": 3512.37612,
+      "pullback_zone": 3575.64561,
+      "bos_time": "2026-11-25 06:00:00",
       "confirmed": false,
       "is_choch": false,
       "displacement_hit": true,
       "zones": [
         {
-          "high": 3558.1045,
-          "low": 3555.35536,
+          "high": 3557.70599,
+          "low": 3542.2432,
           "type": "order_block"
         },
         {
-          "high": 3556.42763,
-          "low": 3549.87575,
+          "high": 3575.64561,
+          "low": 3546.35081,
           "type": "order_block"
         },
         {
-          "high": 3564.0459,
-          "low": 3554.87849,
+          "high": 3557.83257,
+          "low": 3537.9223,
           "type": "order_block"
         }
       ],
@@ -47,17 +47,37 @@
     },
     "bias": "bearish",
     "structure_cache": {
-      "bos": null,
-      "bos_time": null,
-      "zones": [],
-      "liquidity_ok": true,
+      "bos": [
+        3512.37612,
+        3575.64561,
+        141
+      ],
+      "bos_time": "2026-11-25 06:00:00",
+      "zones": [
+        {
+          "high": 3557.70599,
+          "low": 3542.2432,
+          "type": "order_block"
+        },
+        {
+          "high": 3575.64561,
+          "low": 3546.35081,
+          "type": "order_block"
+        },
+        {
+          "high": 3557.83257,
+          "low": 3537.9223,
+          "type": "order_block"
+        }
+      ],
+      "liquidity_ok": false,
       "sr_ok": true,
-      "displacement_hit": false,
-      "atr": 23.501377681493754,
+      "displacement_hit": true,
+      "atr": 24.248389110065194,
       "structure_seq": "Lower Highs, Lower Lows",
       "liquidity_zone": 3513.78086,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-25T14:10:29.804239+00:00"
+      "fetched_at": "2026-11-25T15:00:32.671882+00:00"
     },
     "order_blocks": [
       {
@@ -85,24 +105,24 @@
         "is_choch": true
       },
       {
-        "top": 3558.1045,
-        "bot": 3555.35536,
+        "top": 3557.70599,
+        "bot": 3542.2432,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 3556.42763,
-        "bot": 3549.87575,
+        "top": 3575.64561,
+        "bot": 3546.35081,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
         "is_choch": false
       },
       {
-        "top": 3564.0459,
-        "bot": 3554.87849,
+        "top": 3557.83257,
+        "bot": 3537.9223,
         "type": "order_block",
         "direction": "bearish",
         "active": true,
@@ -111,7 +131,7 @@
     ],
     "last_market_update": {
       "bias": "bearish",
-      "bos_level": 3547.15932
+      "bos_level": 3512.37612
     },
     "breaker_blocks": [
       {
@@ -176,6 +196,6 @@
   },
   "_api_usage": {
     "date": "2026-11-25",
-    "count": 199
+    "count": 201
   }
 }
