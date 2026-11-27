@@ -59,11 +59,11 @@
       "liquidity_ok": true,
       "sr_ok": true,
       "displacement_hit": false,
-      "atr": 12.465483325525332,
+      "atr": 13.279878255438422,
       "structure_seq": "Higher Highs, Higher Lows",
-      "liquidity_zone": 3546.68514,
+      "liquidity_zone": 3563.517635,
       "bias_at_fetch": "bearish",
-      "fetched_at": "2026-11-27T00:20:26.550917+00:00"
+      "fetched_at": "2026-11-27T01:10:29.467225+00:00"
     },
     "order_blocks": [
       {
@@ -182,6 +182,6 @@
   },
   "_api_usage": {
     "date": "2026-11-27",
-    "count": 1
+    "count": 2
   }
 }
